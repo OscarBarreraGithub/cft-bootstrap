@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wolfram": {
+      "command": "/Users/oscar/Documents/Coding/Claude Mathematica/Wolfram-MCP/venv/bin/python",
+      "args": ["/Users/oscar/Documents/Coding/Claude Mathematica/Wolfram-MCP/wolfram_mcp_server.py"]
+    }
+  }
+}

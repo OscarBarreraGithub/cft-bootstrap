@@ -1,0 +1,2 @@
+fastmcp>=2.0.0
+wolframclient>=1.4.0
