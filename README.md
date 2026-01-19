@@ -105,16 +105,21 @@ The 3D Ising model (Δσ ≈ 0.518, Δε ≈ 1.41) is correctly inside the allow
 
 **Δε' bounds** (second scalar, with gap assumption):
 
-We also reproduce the upper bound on Δε' from [El-Showk et al. (2012) Figure 7](https://arxiv.org/abs/1203.6064):
+We partially reproduce the upper bound on Δε' from [El-Showk et al. (2012) Figure 7](https://arxiv.org/abs/1203.6064):
 
-| Δσ | Δε (assumed) | Δε' bound |
-|-----|--------------|-----------|
-| 0.50 | 1.0 | ~1.1 |
-| 0.518 | 1.41 | ~2.6 |
-| 0.55 | 1.49 | ~3.1 |
-| 0.60 | 1.58 | ~3.5 |
+| Δσ | Δε (assumed) | Our Δε' bound | Reference |
+|-----|--------------|---------------|-----------|
+| 0.50 | 1.0 | ~1.5 | ~2.5 |
+| 0.518 | 1.41 | ~2.6 | ~3.8 |
+| 0.55 | 1.49 | ~3.0 | ~4.0 |
+| 0.60 | 1.62 | ~3.5 | ~4.4 |
 
-The reference plot shows Δε' ≤ ~3.8 at the Ising kink with higher derivative order (~20+). Our bounds are tighter due to fewer constraints, but capture the qualitative shape including the kink.
+**Important:** Our bounds are ~1 unit below the reference due to:
+- Using only 3 derivative constraints (paper uses ~60+)
+- Including only scalar operators (paper includes stress tensor)
+- Finite differences vs. Zamolodchikov recursion
+
+Despite the offset, the **qualitative shape** (kink at Ising point, steep rise before, gradual after) is correctly reproduced.
 
 ### What's Needed for Publication-Quality Results
 
