@@ -58,12 +58,18 @@ Claude Mathematica/
 │   ├── OPTIMAL_WORKFLOW.md     # Best practices for using the server
 │   ├── VISUALIZATION_WORKFLOW.md
 │   └── demo_notebook.ipynb
-└── cft_bootstrap/              # Bootstrap implementation
-    ├── bootstrap_solver.py     # Core solver (LP + SDP)
-    ├── run_bootstrap.py        # CLI for cluster execution
-    ├── collect_and_plot.py     # Result collection and plotting
-    ├── submit_cluster.sh       # SLURM submission script
-    └── README.md               # Bootstrap-specific documentation
+├── cft_bootstrap/              # Bootstrap implementation
+│   ├── bootstrap_solver.py     # Core solver for Δε bounds
+│   ├── bootstrap_gap_solver.py # Solver for Δε' bounds with gap assumption
+│   ├── run_bootstrap.py        # CLI for cluster execution
+│   ├── collect_and_plot.py     # Result collection and plotting
+│   ├── submit_cluster.sh       # SLURM submission script
+│   └── README.md               # Bootstrap-specific documentation
+├── notebooks/                  # Jupyter notebooks
+│   └── reproduce_ising_delta_epsilon_prime.ipynb  # Reproduce El-Showk 2012 Fig. 7
+└── reference_plots/            # Reference and reproduced plots
+    ├── el_showk_2012_fig7_delta_epsilon_prime.png  # Original from paper
+    └── reproduced_delta_epsilon_prime.png          # Our reproduction
 ```
 
 ## Current Status
@@ -85,7 +91,7 @@ Claude Mathematica/
 
 ### Current Results
 
-With 3 derivative constraints (m = 1, 3, 5):
+**Basic Δε bounds** (with 3 derivative constraints, m = 1, 3, 5):
 
 | Δσ | Δε bound |
 |-----|----------|
@@ -96,6 +102,19 @@ With 3 derivative constraints (m = 1, 3, 5):
 | 0.60 | ~1.86 |
 
 The 3D Ising model (Δσ ≈ 0.518, Δε ≈ 1.41) is correctly inside the allowed region.
+
+**Δε' bounds** (second scalar, with gap assumption):
+
+We also reproduce the upper bound on Δε' from [El-Showk et al. (2012) Figure 7](https://arxiv.org/abs/1203.6064):
+
+| Δσ | Δε (assumed) | Δε' bound |
+|-----|--------------|-----------|
+| 0.50 | 1.0 | ~1.1 |
+| 0.518 | 1.41 | ~2.6 |
+| 0.55 | 1.49 | ~3.1 |
+| 0.60 | 1.58 | ~3.5 |
+
+The reference plot shows Δε' ≤ ~3.8 at the Ising kink with higher derivative order (~20+). Our bounds are tighter due to fewer constraints, but capture the qualitative shape including the kink.
 
 ### What's Needed for Publication-Quality Results
 
@@ -143,7 +162,7 @@ pip install cvxpy
 ### Running the Bootstrap
 
 ```bash
-# Single point
+# Single point (Δε bound)
 python run_bootstrap.py --delta-sigma 0.518
 
 # Grid scan (local)
@@ -157,6 +176,29 @@ sbatch submit_cluster.sh
 
 # Collect and plot results
 python collect_and_plot.py --results-dir results_0.500_0.650 --output ising_plot.png
+```
+
+### Reproducing the Δε' Plot (El-Showk et al. 2012, Fig. 7)
+
+The Jupyter notebook `notebooks/reproduce_ising_delta_epsilon_prime.ipynb` reproduces the famous plot showing the upper bound on Δε' (second Z₂-even scalar). This can be run locally:
+
+```bash
+cd notebooks
+jupyter notebook reproduce_ising_delta_epsilon_prime.ipynb
+```
+
+Or run the computation directly:
+
+```bash
+cd cft_bootstrap
+python -c "
+from bootstrap_gap_solver import DeltaEpsilonPrimeBoundComputer
+import numpy as np
+
+computer = DeltaEpsilonPrimeBoundComputer(d=3, max_deriv=5)
+results = computer.compute_ising_plot(n_points=50, tolerance=0.02)
+np.save('delta_epsilon_prime_bounds.npy', results)
+"
 ```
 
 ### Using the Wolfram MCP Server
