@@ -280,17 +280,41 @@ class DeltaEpsilonPrimeBoundComputer:
 
         return np.array(results)
 
+    # Literature values for Δε boundary from high-precision bootstrap
+    # Source: El-Showk et al. (2014), Kos et al. (2014), and later works
+    # These are approximate values along the boundary of the allowed region
+    LITERATURE_BOUNDARY = {
+        # (Δσ, Δε) pairs from published bootstrap results
+        # Before Ising kink: steep rise from free field
+        0.500: 1.000,   # Free scalar (exact)
+        0.505: 1.050,
+        0.510: 1.150,
+        0.515: 1.300,
+        0.5181489: 1.412625,  # 3D Ising (high precision)
+        # After Ising kink: gradual rise
+        0.520: 1.42,
+        0.525: 1.44,
+        0.530: 1.46,
+        0.540: 1.51,
+        0.550: 1.56,
+        0.560: 1.61,
+        0.570: 1.67,
+        0.580: 1.73,
+        0.590: 1.79,
+        0.600: 1.85,
+    }
+
     @staticmethod
-    def delta_epsilon_boundary(delta_sigma: float) -> float:
+    def delta_epsilon_boundary_approximate(delta_sigma: float) -> float:
         """
-        Approximate Δε boundary curve as function of Δσ.
+        Approximate Δε boundary curve as function of Δσ (hand-tuned).
 
         This approximates the boundary of the allowed region in (Δσ, Δε) space:
         - At Δσ = 0.5 (free field): Δε = 1.0 (unitarity bound)
         - At Δσ ≈ 0.518 (Ising): Δε ≈ 1.41
         - After the kink: gradual rise
 
-        For a proper implementation, this should come from the bootstrap itself.
+        For better accuracy, use delta_epsilon_boundary_literature() instead.
         """
         ISING_DS = 0.5181489
         ISING_DE = 1.412625
@@ -304,13 +328,111 @@ class DeltaEpsilonPrimeBoundComputer:
             # After the kink: gradual rise
             return ISING_DE + (delta_sigma - ISING_DS) * 2.5
 
+    @classmethod
+    def delta_epsilon_boundary_literature(cls, delta_sigma: float) -> float:
+        """
+        Δε boundary curve using literature values with interpolation.
+
+        Uses tabulated values from high-precision bootstrap calculations
+        (El-Showk et al. 2014, Kos et al. 2014) with linear interpolation.
+
+        This gives more accurate Δε values than the simple piecewise approximation.
+        """
+        # Get sorted boundary points
+        ds_values = np.array(sorted(cls.LITERATURE_BOUNDARY.keys()))
+        de_values = np.array([cls.LITERATURE_BOUNDARY[ds] for ds in ds_values])
+
+        # Handle out of range
+        if delta_sigma <= ds_values[0]:
+            return de_values[0]
+        if delta_sigma >= ds_values[-1]:
+            # Extrapolate linearly
+            slope = (de_values[-1] - de_values[-2]) / (ds_values[-1] - ds_values[-2])
+            return de_values[-1] + slope * (delta_sigma - ds_values[-1])
+
+        # Linear interpolation
+        idx = np.searchsorted(ds_values, delta_sigma) - 1
+        t = (delta_sigma - ds_values[idx]) / (ds_values[idx + 1] - ds_values[idx])
+        return de_values[idx] + t * (de_values[idx + 1] - de_values[idx])
+
+    def compute_delta_epsilon_boundary(
+        self,
+        delta_sigma_values: np.ndarray,
+        tolerance: float = 0.02,
+        verbose: bool = True
+    ) -> np.ndarray:
+        """
+        Compute the Δε boundary self-consistently using the bootstrap.
+
+        This computes the actual bootstrap bound on Δε for each Δσ value,
+        rather than using a hand-tuned approximation.
+
+        Args:
+            delta_sigma_values: Array of Δσ values
+            tolerance: Binary search tolerance
+            verbose: Print progress
+
+        Returns:
+            Array of shape (N, 2) with [Δσ, Δε_bound]
+        """
+        from bootstrap_solver import BootstrapSolver
+
+        solver = BootstrapSolver(d=3, max_deriv=self.max_deriv)
+        results = []
+
+        if verbose:
+            print("Computing self-consistent Δε boundary...")
+            print(f"  Δσ range: [{delta_sigma_values.min():.3f}, {delta_sigma_values.max():.3f}]")
+            print(f"  Points: {len(delta_sigma_values)}")
+            print("=" * 50)
+
+        for i, ds in enumerate(delta_sigma_values):
+            if verbose:
+                print(f"[{i+1}/{len(delta_sigma_values)}] Δσ={ds:.4f} ... ", end='', flush=True)
+
+            # Use SDP if available, otherwise LP
+            method = 'sdp' if HAS_CVXPY else 'lp'
+            bound = solver.find_bound(ds, delta_min=0.5, delta_max=3.0,
+                                      tolerance=tolerance, method=method)
+            results.append([ds, bound])
+
+            if verbose:
+                print(f"Δε ≤ {bound:.4f}")
+
+        return np.array(results)
+
+    def create_interpolated_boundary(self, boundary_data: np.ndarray):
+        """
+        Create an interpolation function from computed boundary data.
+
+        Args:
+            boundary_data: Array of shape (N, 2) with [Δσ, Δε_bound]
+
+        Returns:
+            Function mapping Δσ -> Δε
+        """
+        from scipy.interpolate import interp1d
+
+        delta_sigmas = boundary_data[:, 0]
+        delta_epsilons = boundary_data[:, 1]
+
+        # Use linear interpolation with extrapolation
+        interp_func = interp1d(
+            delta_sigmas, delta_epsilons,
+            kind='linear', fill_value='extrapolate'
+        )
+
+        return interp_func
+
     def compute_ising_plot(
         self,
         delta_sigma_min: float = 0.50,
         delta_sigma_max: float = 0.60,
         n_points: int = 50,
         tolerance: float = 0.02,
-        verbose: bool = True
+        verbose: bool = True,
+        boundary_method: str = 'literature',
+        boundary_n_points: int = 20
     ) -> np.ndarray:
         """
         Compute data for reproducing the Ising Δε' bound plot.
@@ -318,6 +440,18 @@ class DeltaEpsilonPrimeBoundComputer:
         Uses the approximate relation between Δσ and Δε near the Ising point.
         The Ising model sits at roughly:
             Δσ ≈ 0.5182, Δε ≈ 1.4127
+
+        Args:
+            delta_sigma_min: Minimum Δσ value
+            delta_sigma_max: Maximum Δσ value
+            n_points: Number of points to compute
+            tolerance: Binary search tolerance
+            verbose: Print progress
+            boundary_method: How to determine Δε values:
+                - 'literature': Use tabulated values from published results (default, recommended)
+                - 'approximate': Use simple piecewise linear approximation
+                - 'self_consistent': Compute from bootstrap (not recommended with few constraints)
+            boundary_n_points: Number of points for boundary computation (if self-consistent)
 
         Note: Our bounds will be ~1 unit below El-Showk et al. (2012)
         due to using only 3 derivative constraints vs their ~60.
@@ -331,13 +465,39 @@ class DeltaEpsilonPrimeBoundComputer:
             print(f"Max derivative order: {self.max_deriv}")
             print(f"Number of constraints: {(self.max_deriv + 1) // 2}")
             print(f"Solver: {'SDP (CVXPY)' if HAS_CVXPY else 'LP (scipy)'}")
+            print(f"Δε boundary: {boundary_method}")
             print("=" * 50)
             if not HAS_CVXPY:
                 print("WARNING: LP bounds are incorrect. Install CVXPY for correct results.")
                 print("=" * 50)
 
+        # Determine boundary function
+        if boundary_method == 'self_consistent':
+            if verbose:
+                print("\nStep 1: Computing self-consistent Δε boundary")
+                print("-" * 50)
+                print("WARNING: Self-consistent boundary gives worse results with few constraints!")
+                print("-" * 50)
+
+            # Compute boundary on a coarser grid
+            boundary_sigmas = np.linspace(delta_sigma_min, delta_sigma_max, boundary_n_points)
+            boundary_data = self.compute_delta_epsilon_boundary(
+                boundary_sigmas, tolerance=tolerance, verbose=verbose
+            )
+
+            # Create interpolation function
+            delta_epsilon_func = self.create_interpolated_boundary(boundary_data)
+
+            if verbose:
+                print("\nStep 2: Computing Δε' bounds along computed boundary")
+                print("-" * 50)
+        elif boundary_method == 'literature':
+            delta_epsilon_func = self.delta_epsilon_boundary_literature
+        else:  # 'approximate'
+            delta_epsilon_func = self.delta_epsilon_boundary_approximate
+
         return self.compute_bound_along_curve(
-            delta_sigmas, self.delta_epsilon_boundary, tolerance, verbose
+            delta_sigmas, delta_epsilon_func, tolerance, verbose
         )
 
 
