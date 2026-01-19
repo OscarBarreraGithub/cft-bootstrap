@@ -107,7 +107,18 @@ class CrossingVector:
     @staticmethod
     @lru_cache(maxsize=20)
     def _central_diff_coeffs(m: int) -> tuple:
-        """Central difference coefficients for m-th derivative."""
+        """
+        Central difference coefficients for m-th derivative.
+
+        Uses pre-computed coefficients for m <= 7, and computes higher-order
+        coefficients using the recursive formula for central differences.
+
+        Note: Central differences have error O(h^2), while the forward difference
+        fallback has error O(h). The pre-computed coefficients should be used
+        whenever possible for numerical stability.
+        """
+        # Pre-computed central difference coefficients (symmetric stencils)
+        # These give O(h^2) accuracy
         coeffs = {
             1: (-0.5, 0, 0.5),
             2: (1, -2, 1),
@@ -119,7 +130,41 @@ class CrossingVector:
         }
         if m in coeffs:
             return coeffs[m]
-        return tuple([(-1)**i * comb(m, i) for i in range(m+1)])
+
+        # For m > 7, compute central difference coefficients numerically
+        # using the generating function approach. The stencil width is m+1 for
+        # odd m and m+1 for even m (to maintain symmetry).
+        # We use linear algebra to solve for coefficients that give exact
+        # derivatives of polynomials up to degree m.
+        warnings.warn(
+            f"Using computed central difference coefficients for m={m}. "
+            "For best accuracy with m > 7, consider using symbolic differentiation."
+        )
+
+        # Width of stencil (must be >= m+1 for m-th derivative)
+        # Use m+1 points for minimal stencil
+        n_points = m + 1 + (m % 2)  # Ensure odd number for symmetric stencil
+        half_n = n_points // 2
+
+        # Build the Vandermonde-like matrix: A[i,j] = j^i for powers 0..m
+        # where j ranges from -half_n to half_n
+        import numpy as np
+        points = np.arange(-half_n, half_n + 1, dtype=float)
+        A = np.vander(points, N=m+1, increasing=True).T
+
+        # We want coefficients c such that sum(c[j] * f(x + j*h)) / h^m = f^(m)(x)
+        # For polynomial f(x) = x^k, this means c . points^k = m! * delta_{k,m}
+        b = np.zeros(m + 1)
+        b[m] = factorial(m)
+
+        # Solve the system
+        try:
+            c = np.linalg.lstsq(A, b, rcond=None)[0]
+            return tuple(c)
+        except Exception:
+            # Ultimate fallback: forward difference (O(h) accuracy only)
+            warnings.warn(f"Failed to compute central difference coefficients for m={m}, using forward difference")
+            return tuple([(-1)**i * comb(m, i) for i in range(m+1)])
 
     def build_F_vector(self, delta: float, max_deriv: int) -> np.ndarray:
         """
@@ -219,26 +264,42 @@ class BootstrapSolver:
             prob.solve(solver=cp.SCS, verbose=False)
             # If feasible, point is EXCLUDED
             return prob.status != cp.OPTIMAL
-        except:
-            return True  # Assume allowed if solver fails
+        except Exception as e:
+            # Solver failure - log warning and return None to indicate uncertainty
+            warnings.warn(f"SDP solver failed at Δσ={delta_sigma:.4f}, Δgap={delta_gap:.4f}: {e}")
+            return None  # Indicates solver failure, not allowed/excluded
 
     def find_bound(self, delta_sigma: float,
                    delta_min: float = 0.5, delta_max: float = 3.0,
                    tolerance: float = 0.01, method: str = 'lp') -> float:
         """
         Find the bootstrap upper bound on the gap using binary search.
+
+        Returns:
+            The upper bound on delta_epsilon, or float('nan') if solver failed.
         """
         is_feasible = self.is_feasible_lp if method == 'lp' else self.is_feasible_sdp
 
-        if not is_feasible(delta_sigma, delta_min):
+        result = is_feasible(delta_sigma, delta_min)
+        if result is None:
+            return float('nan')  # Solver failure
+        if not result:
             return delta_min
-        if is_feasible(delta_sigma, delta_max):
+
+        result = is_feasible(delta_sigma, delta_max)
+        if result is None:
+            return float('nan')  # Solver failure
+        if result:
             return float('inf')
 
         lo, hi = delta_min, delta_max
         while hi - lo > tolerance:
             mid = (lo + hi) / 2
-            if is_feasible(delta_sigma, mid):
+            result = is_feasible(delta_sigma, mid)
+            if result is None:
+                warnings.warn(f"Solver failed during binary search at Δε={mid:.4f}")
+                return float('nan')
+            if result:
                 lo = mid
             else:
                 hi = mid

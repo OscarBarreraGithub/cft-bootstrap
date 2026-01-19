@@ -185,10 +185,8 @@ Solve[x^2 - 5x + 6 == 0, x]
 
 #### Step 1: Use Wolfram MCP for Computation
 
-```wolfram
-wolfram:wolfram_execute(
-  "Table[{x, Sin[x]*Exp[-x/10]}, {x, 0, 4*Pi, 0.1}]"
-)
+```
+wolfram_eval("Table[{x, Sin[x]*Exp[-x/10]}, {x, 0, 4*Pi, 0.1}]")
 ```
 
 **Result:** Array of [x, y] pairs with precise numerical values
@@ -404,32 +402,28 @@ See the `examples/` directory for complete working examples:
 *Last Updated: October 2025*
 *Wolfram MCP Server Version: 1.0*
 
-## Copilot Feedback
+## Additional Notes
 
-### Honest Feedback & Improvements
+### Native Plotting Capabilities
 
-After reviewing the codebase and this workflow document, I've identified several areas for improvement to align the documentation with the actual implementation and enhance the user experience.
+While the hybrid workflow (Wolfram → Data → React/Python) is recommended for publication-quality and interactive visualizations, the MCP server also provides quick plotting tools:
 
-#### 1. Critical Tool Name Mismatches
-The documentation repeatedly references `wolfram_execute`, but the actual tool implemented in `wolfram_mcp_server.py` is named **`wolfram_eval`**.
-- **Issue:** Users following this guide will encounter "Tool not found" errors.
-- **Fix:** Update all code snippets to use `wolfram_eval` or rename the tool in the Python server to match the docs.
+- `wolfram_plot` - 2D plots (returns base64-encoded PNG)
+- `wolfram_plot3d` - 3D surface plots (returns base64-encoded PNG)
 
-#### 2. Native Plotting Capabilities Ignored
-The document states that the MCP "returns symbolic representations rather than rendered images," which is partially incorrect.
-- **Fact:** The current `wolfram_mcp_server.py` **does** implement `wolfram_plot` and `wolfram_plot3d` tools that return base64-encoded PNG images.
-- **Improvement:** While the "Hybrid Workflow" (Wolfram → Data → React/Python) is indeed superior for interactivity and quality, the document should acknowledge the existence of the quick plotting tools for rapid prototyping.
+These are useful for rapid prototyping but offer less control than external visualization tools.
 
-#### 3. "Wolfram Statistics" Tool Missing
-The `README.md` and potentially other docs mention a `wolfram_statistics` tool.
-- **Fact:** This tool is **not implemented** in the server code.
-- **Fix:** The workflow correctly suggests using `wolfram_eval` (or `wolfram_execute` in its terminology) for statistics, which is the correct approach. The server documentation should be updated to reflect that statistics are handled via the general evaluation tool.
+### JSON Data Export Tip
 
-#### 4. JSON Data Export Optimization
-The manual "copy-paste" or "transcribe" step in the workflow is error-prone.
-- **Improvement:** Use Wolfram's `ExportString[..., "JSON"]` function directly in `wolfram_eval`. This returns a properly formatted JSON string that can be parsed programmatically by the client/LLM, removing the string parsing ambiguity.
+For cleaner data transfer, use Wolfram's `ExportString` function:
 
-#### 5. Hardcoded Paths & Configuration
-This is more of a code issue than a workflow one, but worth noting for users following the setup:
-- The server hardcodes the macOS kernel path (`/Applications/Wolfram.app/...`). Windows/Linux users using this workflow will need to manually set the `WOLFRAM_KERNEL_PATH` environment variable, which should be highlighted in the "Prerequisites" or setup section.
+```
+wolfram_eval("ExportString[Table[{x, Sin[x]}, {x, 0, 2*Pi, 0.1}], \"JSON\"]")
+```
+
+This returns properly formatted JSON that can be parsed programmatically.
+
+### Platform Notes
+
+The Wolfram MCP server is primarily developed on macOS. Users on other platforms should set the `WOLFRAM_KERNEL_PATH` environment variable to their Wolfram kernel location. See the main README for platform-specific paths.
 

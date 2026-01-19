@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "wolfram": {
+      "command": "${PROJECT_ROOT}/Wolfram-MCP/venv/bin/python",
+      "args": ["${PROJECT_ROOT}/Wolfram-MCP/wolfram_mcp_server.py"],
+      "env": {
+        "WOLFRAM_KERNEL_PATH": "/Applications/Wolfram.app/Contents/MacOS/WolframKernel"
+      }
+    }
+  }
+}

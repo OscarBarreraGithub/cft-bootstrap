@@ -41,6 +41,8 @@ A sophisticated Model Context Protocol (MCP) server providing full Wolfram Langu
 - Wolfram Mathematica 14.0+ or Wolfram Engine (free for developers)
 - Claude Desktop or Claude Code
 
+> **Platform Note:** This server is primarily developed and tested on **macOS**. While it should work on other platforms, you will need to configure the `WOLFRAM_KERNEL_PATH` environment variable. See the [Configuration](#configuration) section for platform-specific paths.
+
 ## Installation
 
 ### 1. Install Wolfram Mathematica or Wolfram Engine
@@ -235,6 +237,27 @@ wolfram_run_test_suite("Derivative Rules")
 |----------|---------|-------------|
 | `WOLFRAM_KERNEL_PATH` | `/Applications/Wolfram.app/Contents/MacOS/WolframKernel` | Path to WolframKernel |
 | `WOLFRAM_SESSION_TIMEOUT` | `3600` | Session timeout in seconds |
+
+### Platform-Specific Kernel Paths
+
+**macOS (default):**
+```
+/Applications/Wolfram.app/Contents/MacOS/WolframKernel
+```
+
+**Linux:**
+```
+/usr/local/Wolfram/Mathematica/14.0/Executables/WolframKernel
+```
+or for Wolfram Engine:
+```
+/usr/local/Wolfram/WolframEngine/14.0/Executables/WolframKernel
+```
+
+**Windows:**
+```
+C:\Program Files\Wolfram Research\Mathematica\14.0\WolframKernel.exe
+```
 
 ### Session Management
 

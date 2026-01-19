@@ -49,7 +49,8 @@ The remarkable discovery (El-Showk et al., 2012): The **3D Ising model sits exac
 ```
 Claude Mathematica/
 ├── README.md                    # This file
-├── .mcp.json                    # MCP server configuration
+├── SETUP.md                     # Configuration guide
+├── .mcp.json.example            # MCP config template (copy to .mcp.json)
 ├── .claude/
 │   └── settings.local.json     # Claude permissions for Wolfram tools
 ├── Wolfram-MCP/                 # Mathematica MCP server
@@ -119,6 +120,8 @@ The 3D Ising model (Δσ ≈ 0.518, Δε ≈ 1.41) is correctly inside the allow
 - Python 3.9+
 - Mathematica/Wolfram Engine (for the MCP server)
 - Claude Code CLI
+
+> **Platform Note:** The Wolfram MCP server is primarily developed and tested on **macOS**. It should work on other platforms with proper configuration of the `WOLFRAM_KERNEL_PATH` environment variable. See [`SETUP.md`](SETUP.md) and the [Wolfram-MCP README](Wolfram-MCP/README.md#configuration) for platform-specific details.
 
 ### Installation
 

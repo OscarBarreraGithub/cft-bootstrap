@@ -18,9 +18,12 @@ build/
 # Results and data
 *.npy
 *.json
-!.mcp.json
+!.mcp.json.example
 results*/
 logs/
+
+# MCP configuration (contains user-specific paths)
+.mcp.json
 
 # IDE
 .vscode/
