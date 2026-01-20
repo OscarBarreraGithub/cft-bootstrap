@@ -40,7 +40,7 @@ except ImportError:
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-from bootstrap_solver import ConformalBlock3D, CrossingVector
+from .bootstrap_solver import ConformalBlock3D, CrossingVector
 
 
 class GapBootstrapSolver:
@@ -375,7 +375,7 @@ class DeltaEpsilonPrimeBoundComputer:
         Returns:
             Array of shape (N, 2) with [Δσ, Δε_bound]
         """
-        from bootstrap_solver import BootstrapSolver
+        from .bootstrap_solver import BootstrapSolver
 
         solver = BootstrapSolver(d=3, max_deriv=self.max_deriv)
         results = []
