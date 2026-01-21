@@ -10,10 +10,10 @@ This document outlines what is needed to exactly reproduce the Δε' bounds from
 
 | Metric | Our Implementation | Reference | Gap |
 |--------|-------------------|-----------|-----|
-| Δε' at Ising (Δσ=0.518) | ~2.2-2.8 | ~3.8 | ~1.0-1.6 |
-| Derivative constraints | 3-11 | ~60+ | ~6-20x fewer |
-| Operator types | Scalars only | Scalars + spinning | Missing spin-2+ |
-| Numerical stability | max_deriv ~ 11 | max_deriv ~ 60 | SDP conditioning issues |
+| Δε' at Ising (Δσ=0.518) | ~2.5 | ~3.8 | ~1.3 |
+| Derivative constraints | 6-11 | ~60+ | ~6-10x fewer |
+| Operator types | Scalars + spinning (ℓ=0,2,4,6) | All spins | Covered |
+| Numerical stability | max_deriv ~ 21 | max_deriv ~ 60 | SDP conditioning issues |
 
 ## Key Finding: Spinning Operators are Critical
 
@@ -44,21 +44,30 @@ More constraints actually make bounds **tighter** (lower), not higher! This is b
 
 ---
 
-### 2. Spinning Conformal Blocks ⬜ NOT STARTED (HIGHEST PRIORITY)
+### 2. Spinning Conformal Blocks ✅ IMPLEMENTED
 
-**Current:** We only include scalar operators (spin-0) in the OPE.
+**Previous:** We only included scalar operators (spin-0) in the OPE.
 
-**Problem:** The stress tensor (spin-2, Δ=3) and other spinning operators contribute POSITIVELY to crossing constraints. Without them, we exclude configurations too easily, giving bounds that are too LOW.
+**Solution:** Implemented spinning conformal blocks using the radial expansion from Hogervorst & Rychkov (2013).
 
-**Solution:** Implement spinning conformal blocks using the Dolan-Osborn formula for general spin.
+**Implementation:** `cft_bootstrap/spinning_conformal_blocks.py`
+- `SpinningConformalBlock`: Computes blocks for any spin ℓ using Casimir recursion
+- `SpinningCrossingVector`: Builds F-vectors for spinning operators
+- `SpinningBootstrapSolver`: Bootstrap solver including spinning operators up to max_spin
 
-**Impact:** **CRITICAL** - This is now identified as the main bottleneck. Expected to improve bounds by ~1-1.5 units.
+**Key Details:**
+- Uses radial expansion: g_{Δ,ℓ}(ρ,η) = ρ^Δ Σ A_{n,j} ρ^n P_j(η)
+- Casimir recursion for coefficients A_{n,j}
+- Calibration factor (z/ρ)^Δ to match Dolan-Osborn normalization
+- Scalars use exact Taylor series; spinning uses polynomial fitting for F-vectors
 
-**Complexity:** MEDIUM - formulas exist, need careful implementation.
+**Result:** Spinning operators are included but don't significantly improve bounds with current constraint count. The bound remains at ~2.5 with 6 constraints, matching the scalar-only result.
+
+**Limitation:** The radial expansion has a different normalization than Dolan-Osborn, requiring calibration. More sophisticated normalization or direct implementation of spinning Dolan-Osborn formulas may be needed.
 
 **References:**
+- Hogervorst & Rychkov (2013): [arXiv:1303.1111](https://arxiv.org/abs/1303.1111) - Radial coordinates
 - Dolan, Osborn (2001): "Conformal four point functions and the operator product expansion"
-- Costa et al. (2011): "Spinning conformal blocks"
 
 ---
 
@@ -114,16 +123,19 @@ More constraints actually make bounds **tighter** (lower), not higher! This is b
 
 ## Revised Implementation Priority
 
-Based on our analysis showing spinning operators are the critical missing piece:
+Based on current analysis showing the ~1.3 unit gap is likely due to insufficient constraint power and numerical issues:
 
 | Priority | Improvement | Impact | Complexity |
 |----------|-------------|--------|------------|
-| **1** | **Spinning conformal blocks** | **CRITICAL** | MEDIUM |
-| 2 | SDPB integration | MEDIUM | MEDIUM |
-| 3 | Polynomial approximation | MEDIUM | MEDIUM |
+| **1** | **SDPB integration** | **HIGH** | MEDIUM |
+| 2 | Polynomial approximation | HIGH | MEDIUM |
+| 3 | More derivative constraints | MEDIUM | LOW |
 | 4 | Mixed correlator bootstrap | HIGH | HIGH |
 
-**Note:** Taylor series / Zamolodchikov recursion was implemented but doesn't help without spinning operators.
+**Note:** Both Taylor series and spinning operators have been implemented. The remaining gap is likely due to:
+1. Insufficient number of constraints (6 vs ~60 in reference)
+2. SDP solver conditioning issues
+3. Discrete sampling vs polynomial positivity
 
 ## Progress Tracking
 
@@ -135,15 +147,15 @@ Based on our analysis showing spinning operators are the critical missing piece:
 - [x] Qualitative reproduction of Figure 7 shape
 - [x] Literature Δε boundary values
 - [x] Taylor series conformal blocks (high-order derivatives)
-- [x] Analysis showing spinning operators are the bottleneck
+- [x] Spinning conformal blocks (radial expansion)
+- [x] Analysis of constraint power requirements
 
 ### In Progress 🔄
 - [ ] None currently
 
 ### Not Started ⬜
-- [ ] **Spinning conformal blocks (highest priority)**
-- [ ] SDPB integration
-- [ ] Polynomial approximation
+- [ ] SDPB integration (highest priority for precision)
+- [ ] Polynomial approximation for positivity
 - [ ] Mixed correlator bootstrap
 
 ---
@@ -152,9 +164,9 @@ Based on our analysis showing spinning operators are the critical missing piece:
 
 | After Implementing | Expected Δε' at Ising | Gap to Reference |
 |--------------------|----------------------|------------------|
-| Current (scalars only) | ~2.2-2.8 | ~1.0-1.6 |
-| + Spinning blocks (spin ≤ 2) | ~3.2-3.5 | ~0.3-0.6 |
-| + SDPB + more constraints | ~3.6-3.7 | ~0.1-0.2 |
+| Current (scalars + spinning, 6 constraints) | ~2.5 | ~1.3 |
+| + SDPB + 20 constraints | ~3.0-3.3 | ~0.5-0.8 |
+| + Polynomial positivity | ~3.5-3.7 | ~0.1-0.3 |
 | + All improvements | ~3.8 | ~0 |
 
 ---
@@ -163,7 +175,8 @@ Based on our analysis showing spinning operators are the critical missing piece:
 
 - `cft_bootstrap/bootstrap_solver.py` - Basic bootstrap solver
 - `cft_bootstrap/bootstrap_gap_solver.py` - Gap-based solver for Δε' bounds
-- `cft_bootstrap/taylor_conformal_blocks.py` - Taylor series implementation
+- `cft_bootstrap/taylor_conformal_blocks.py` - Taylor series implementation for scalars
+- `cft_bootstrap/spinning_conformal_blocks.py` - Spinning conformal blocks (radial expansion)
 - `notebooks/reproduce_ising_delta_epsilon_prime.ipynb` - Jupyter notebook
 - `reference_plots/` - Comparison plots
 
