@@ -6,10 +6,20 @@ This script is designed to be run on a cluster with various options:
 - Single point evaluation
 - Grid scan over delta_sigma
 - Parallel execution using multiprocessing or MPI
+- SDPB integration for high-precision bounds
 
 Usage:
-    # Single point
+    # Single point (LP method)
     python run_bootstrap.py --delta-sigma 0.518 --method lp
+
+    # Single point (SDP method with CVXPY)
+    python run_bootstrap.py --delta-sigma 0.518 --method sdp
+
+    # Single point (SDPB - high precision)
+    python run_bootstrap.py --delta-sigma 0.518 --method sdpb --max-deriv 21
+
+    # Δε' bounds with gap assumption
+    python run_bootstrap.py --gap-bound --delta-sigma 0.518 --delta-epsilon 1.41
 
     # Grid scan
     python run_bootstrap.py --grid --sigma-min 0.50 --sigma-max 0.65 --n-points 50
@@ -29,6 +39,11 @@ from typing import Optional
 import sys
 
 from bootstrap_solver import BootstrapSolver, BootstrapBoundComputer
+from taylor_conformal_blocks import HighOrderGapBootstrapSolver
+from sdpb_interface import (
+    SDPBSolver, SDPBConfig, FallbackSDPBSolver,
+    get_best_solver, compute_bound_with_sdpb
+)
 
 # Silence the CVXPY warning
 import warnings
@@ -61,6 +76,94 @@ def run_single_point(delta_sigma: float, method: str = 'lp',
 
     print(f"\nResult: Δε ≤ {bound:.6f}")
     print(f"Compute time: {t1-t0:.2f}s")
+
+    if output_file:
+        with open(output_file, 'w') as f:
+            json.dump(result, f, indent=2)
+        print(f"Saved to {output_file}")
+
+    return result
+
+
+def run_gap_bound(delta_sigma: float, delta_epsilon: float,
+                  method: str = 'sdpb', max_deriv: int = 21,
+                  poly_degree: int = 20, tolerance: float = 0.01,
+                  sdpb_threads: int = 4, output_file: Optional[str] = None):
+    """
+    Compute Δε' bound with gap assumption using SDPB or fallback solver.
+
+    This computes the upper bound on the second Z2-even scalar dimension,
+    assuming the first scalar is at Δε.
+
+    Args:
+        delta_sigma: External operator dimension
+        delta_epsilon: First scalar dimension (assumed)
+        method: 'sdpb' for SDPB solver, 'cvxpy' for fallback
+        max_deriv: Maximum derivative order
+        poly_degree: Polynomial approximation degree (for SDPB)
+        tolerance: Binary search tolerance
+        sdpb_threads: Number of threads for SDPB
+        output_file: Output file path
+
+    Returns:
+        Dictionary with results
+    """
+    print(f"Computing Δε' bound with gap assumption")
+    print(f"  Δσ = {delta_sigma}")
+    print(f"  Δε = {delta_epsilon} (assumed first scalar)")
+    print(f"  Method: {method}")
+    print(f"  Max derivative order: {max_deriv}")
+    print(f"  Number of constraints: {(max_deriv + 1) // 2}")
+    print(f"  Tolerance: {tolerance}")
+
+    t0 = time.time()
+
+    if method == 'sdpb':
+        # Try SDPB, fall back to CVXPY if not available
+        config = SDPBConfig(num_threads=sdpb_threads)
+        solver = get_best_solver(config, max_deriv)
+
+        if isinstance(solver, SDPBSolver):
+            print("  Using SDPB solver")
+            bound = solver.find_bound(
+                delta_sigma, delta_epsilon,
+                tolerance=tolerance,
+                max_deriv=max_deriv,
+                poly_degree=poly_degree,
+                verbose=True
+            )
+        else:
+            print("  SDPB not available, using CVXPY fallback")
+            bound = solver.find_bound(
+                delta_sigma, delta_epsilon,
+                tolerance=tolerance,
+                verbose=True
+            )
+    else:
+        # Use high-order solver with Taylor series
+        print("  Using CVXPY with Taylor series expansion")
+        solver = HighOrderGapBootstrapSolver(d=3, max_deriv=max_deriv)
+        bound = solver.find_delta_epsilon_prime_bound(
+            delta_sigma, delta_epsilon,
+            tolerance=tolerance
+        )
+
+    t1 = time.time()
+
+    result = {
+        'delta_sigma': delta_sigma,
+        'delta_epsilon': delta_epsilon,
+        'delta_epsilon_prime_bound': bound,
+        'method': method,
+        'max_derivative_order': max_deriv,
+        'n_constraints': (max_deriv + 1) // 2,
+        'tolerance': tolerance,
+        'compute_time_seconds': t1 - t0
+    }
+
+    print(f"\nResult: Δε' ≤ {bound:.6f}")
+    print(f"Compute time: {t1-t0:.2f}s")
+    print(f"Reference (El-Showk 2012 at Ising point): ~3.8")
 
     if output_file:
         with open(output_file, 'w') as f:
@@ -185,16 +288,37 @@ def collect_array_results(output_dir: str = 'results', output_file: str = 'combi
 
 
 def main():
-    parser = argparse.ArgumentParser(description='CFT Bootstrap Computation')
+    parser = argparse.ArgumentParser(
+        description='CFT Bootstrap Computation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Basic Δε bound
+    python run_bootstrap.py --delta-sigma 0.518 --method lp
+
+    # Δε' bound with gap assumption (using SDPB if available)
+    python run_bootstrap.py --gap-bound --delta-sigma 0.518 --delta-epsilon 1.41
+
+    # High-order constraints (21 derivatives = 11 constraints)
+    python run_bootstrap.py --gap-bound --max-deriv 21 --method sdpb
+
+    # Grid scan
+    python run_bootstrap.py --grid --sigma-min 0.50 --sigma-max 0.60 --n-points 20
+        """
+    )
 
     # Mode selection
     parser.add_argument('--grid', action='store_true', help='Run grid scan')
+    parser.add_argument('--gap-bound', action='store_true',
+                       help='Compute Δε\' bound with gap assumption')
     parser.add_argument('--array-job', action='store_true', help='Run as SLURM array job')
     parser.add_argument('--collect', action='store_true', help='Collect array job results')
 
     # Single point options
     parser.add_argument('--delta-sigma', type=float, default=0.518,
-                       help='External operator dimension')
+                       help='External operator dimension (default: 0.518 for Ising)')
+    parser.add_argument('--delta-epsilon', type=float, default=1.41,
+                       help='First scalar dimension for gap bounds (default: 1.41 for Ising)')
 
     # Grid options
     parser.add_argument('--sigma-min', type=float, default=0.50)
@@ -210,10 +334,20 @@ def main():
     parser.add_argument('--n-jobs', type=int, help='Total number of jobs')
 
     # Solver options
-    parser.add_argument('--method', choices=['lp', 'sdp'], default='lp')
+    parser.add_argument('--method', choices=['lp', 'sdp', 'sdpb', 'cvxpy'], default='lp',
+                       help='Solver method: lp, sdp (CVXPY), sdpb (SDPB), cvxpy (fallback)')
     parser.add_argument('--max-deriv', type=int, default=5,
-                       help='Max derivative order (use 5 or 7 for stability)')
-    parser.add_argument('--tolerance', type=float, default=0.01)
+                       help='Max derivative order (default: 5, use 21 for high precision)')
+    parser.add_argument('--poly-degree', type=int, default=20,
+                       help='Polynomial approximation degree for SDPB (default: 20)')
+    parser.add_argument('--tolerance', type=float, default=0.01,
+                       help='Binary search tolerance (default: 0.01)')
+
+    # SDPB specific options
+    parser.add_argument('--sdpb-threads', type=int, default=4,
+                       help='Number of threads for SDPB (default: 4)')
+    parser.add_argument('--sdpb-precision', type=int, default=400,
+                       help='SDPB precision in bits (default: 400)')
 
     # Output
     parser.add_argument('--output', '-o', type=str, help='Output file')
@@ -229,6 +363,18 @@ def main():
             sys.exit(1)
         run_array_job(args.job_index, args.n_jobs, args.sigma_min, args.sigma_max,
                      args.method, args.max_deriv, args.tolerance, args.output_dir)
+    elif args.gap_bound:
+        # Δε' bound with gap assumption
+        output = args.output or f'gap_bound_{args.delta_sigma}_{args.delta_epsilon}.json'
+        run_gap_bound(
+            args.delta_sigma, args.delta_epsilon,
+            method=args.method if args.method in ['sdpb', 'cvxpy'] else 'sdpb',
+            max_deriv=args.max_deriv,
+            poly_degree=args.poly_degree,
+            tolerance=args.tolerance,
+            sdpb_threads=args.sdpb_threads,
+            output_file=output
+        )
     elif args.grid:
         output = args.output or f'bootstrap_grid_{args.sigma_min}_{args.sigma_max}_{args.n_points}.json'
         run_grid(args.sigma_min, args.sigma_max, args.n_points,

@@ -123,18 +123,22 @@ Despite the offset, the **qualitative shape** (kink at Ising point, steep rise b
 
 ### What's Needed for Publication-Quality Results
 
-1. **More derivatives** - Need ~20+ derivative constraints for tight bounds
-   - Current limitation: numerical instability in high-order finite differences
-   - Solution: Use automatic differentiation or rational arithmetic
+1. ✅ **More derivatives** - Need ~20+ derivative constraints for tight bounds
+   - ~~Current limitation: numerical instability in high-order finite differences~~
+   - **IMPLEMENTED**: Taylor series expansion (`taylor_conformal_blocks.py`)
 
-2. **SDP solver** - Proper semidefinite programming gives optimal bounds
-   - Install CVXPY: `pip install cvxpy`
-   - Or use SDPB (the gold standard for bootstrap)
+2. ✅ **SDP solver** - Proper semidefinite programming gives optimal bounds
+   - **IMPLEMENTED**: SDPB integration (`sdpb_interface.py`)
+   - Automatic fallback to CVXPY if SDPB not installed
 
-3. **Spinning operators** - Include the stress tensor (Δ=3, ℓ=2)
-   - Adds another constraint that sharpens the bound significantly
+3. ✅ **Spinning operators** - Include the stress tensor (Δ=3, ℓ=2)
+   - **IMPLEMENTED**: Radial expansion method (`spinning_conformal_blocks.py`)
 
-4. **Multiple correlators** - Use ⟨σσσσ⟩, ⟨σσεε⟩, ⟨εεεε⟩ together
+4. ⬜ **Polynomial positivity** - Enforce positivity for all Δ ≥ gap continuously
+   - Currently using discrete sampling
+   - Needed for rigorous bounds
+
+5. ⬜ **Multiple correlators** - Use ⟨σσσσ⟩, ⟨σσεε⟩, ⟨εεεε⟩ together
    - This is what produces the sharp kink at the Ising point
 
 ## Getting Started
@@ -170,6 +174,12 @@ pip install cvxpy
 # Single point (Δε bound)
 python run_bootstrap.py --delta-sigma 0.518
 
+# Δε' bound with gap assumption (SDPB if available, else CVXPY)
+python run_bootstrap.py --gap-bound --delta-sigma 0.518 --delta-epsilon 1.41
+
+# High-order constraints (21 derivatives = 11 constraints)
+python run_bootstrap.py --gap-bound --max-deriv 21 --method sdpb
+
 # Grid scan (local)
 python run_bootstrap.py --grid --sigma-min 0.50 --sigma-max 0.65 --n-points 50
 
@@ -182,6 +192,23 @@ sbatch submit_cluster.sh
 # Collect and plot results
 python collect_and_plot.py --results-dir results_0.500_0.650 --output ising_plot.png
 ```
+
+### Installing SDPB (Optional but Recommended)
+
+SDPB provides high-precision bounds with arbitrary-precision arithmetic.
+
+**macOS:**
+```bash
+brew tap davidsd/sdpb
+brew install sdpb
+```
+
+**Linux (Docker):**
+```bash
+docker pull bootstrapcollaboration/sdpb
+```
+
+**From source:** See [SDPB GitHub](https://github.com/davidsd/sdpb)
 
 ### Reproducing the Δε' Plot (El-Showk et al. 2012, Fig. 7)
 

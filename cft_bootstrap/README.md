@@ -11,8 +11,14 @@ pip install -r requirements.txt
 # Test the solver
 python bootstrap_solver.py
 
-# Run a single point
+# Run a single point (Δε bound)
 python run_bootstrap.py --delta-sigma 0.518
+
+# Run Δε' bound with gap assumption
+python run_bootstrap.py --gap-bound --delta-sigma 0.518 --delta-epsilon 1.41
+
+# Run with high-order constraints
+python run_bootstrap.py --gap-bound --max-deriv 21 --method sdpb
 
 # Run a grid
 python run_bootstrap.py --grid --sigma-min 0.50 --sigma-max 0.65 --n-points 50
@@ -23,11 +29,13 @@ python run_bootstrap.py --grid --sigma-min 0.50 --sigma-max 0.65 --n-points 50
 | File | Description |
 |------|-------------|
 | `bootstrap_solver.py` | Core implementation: conformal blocks, crossing equation, LP solver |
+| `bootstrap_gap_solver.py` | Gap-based solver for Δε' bounds |
+| `taylor_conformal_blocks.py` | Taylor series expansion for high-order derivatives |
+| `spinning_conformal_blocks.py` | Spinning conformal blocks (radial expansion) |
+| `sdpb_interface.py` | **NEW** SDPB integration for high-precision bounds |
 | `run_bootstrap.py` | Command-line interface for local and cluster execution |
 | `collect_and_plot.py` | Collect cluster results and generate publication-quality plots |
 | `submit_cluster.sh` | SLURM submission script for HPC clusters |
-| `conformal_blocks.py` | Alternative conformal block implementation (reference) |
-| `conformal_blocks_v2.py` | Experimental improved numerics |
 
 ## Theory Summary
 
@@ -75,10 +83,73 @@ where u = zz̄ and v = (1-z)(1-z̄).
 
 | Parameter | Description | Default | Notes |
 |-----------|-------------|---------|-------|
-| `--max-deriv` | Maximum derivative order | 5 | Use 5-7 for stability; need ~20 for tight bounds |
+| `--max-deriv` | Maximum derivative order | 5 | Use 5-7 for stability with finite diff; 21+ with Taylor series |
 | `--tolerance` | Bound precision | 0.01 | Lower = more precise, more computation |
-| `--method` | Solver type | `lp` | `lp` is fast; `sdp` is optimal (needs CVXPY) |
-| `--n-samples` | Operators sampled | 100 | More = tighter bounds |
+| `--method` | Solver type | `lp` | `lp`, `sdp` (CVXPY), `sdpb` (SDPB), `cvxpy` (fallback) |
+| `--poly-degree` | Polynomial approximation | 20 | For SDPB polynomial matrix program |
+| `--gap-bound` | Enable Δε' bounds | False | Compute second scalar bound with gap assumption |
+| `--delta-epsilon` | First scalar dimension | 1.41 | For gap-bound mode (Ising default) |
+
+## SDPB Integration
+
+SDPB (Semidefinite Program solver for the Bootstrap) is the gold-standard solver for conformal bootstrap problems. This implementation provides:
+
+1. **Polynomial Matrix Program (PMP) generation** - Approximates crossing constraints as polynomials
+2. **Automatic fallback** - Uses CVXPY if SDPB is not installed
+3. **High-order derivatives** - Supports 20+ constraint via Taylor series expansion
+
+### Installing SDPB
+
+**macOS (Homebrew):**
+```bash
+brew tap davidsd/sdpb
+brew install sdpb
+```
+
+**Linux (Docker):**
+```bash
+docker pull bootstrapcollaboration/sdpb
+```
+
+**From source:** See [SDPB GitHub](https://github.com/davidsd/sdpb)
+
+### Using SDPB
+
+```bash
+# Basic usage (falls back to CVXPY if SDPB unavailable)
+python run_bootstrap.py --gap-bound --method sdpb
+
+# With high-order constraints
+python run_bootstrap.py --gap-bound --max-deriv 21 --method sdpb
+
+# Configure SDPB parameters
+python run_bootstrap.py --gap-bound --sdpb-threads 8 --sdpb-precision 512
+```
+
+### Python API
+
+```python
+from sdpb_interface import compute_bound_with_sdpb, SDPBConfig
+
+# Quick computation
+bound = compute_bound_with_sdpb(
+    delta_sigma=0.518,
+    delta_epsilon=1.41,
+    max_deriv=21,
+    tolerance=0.01
+)
+print(f"Δε' ≤ {bound:.4f}")
+
+# With custom configuration
+config = SDPBConfig(
+    precision=512,      # bits
+    num_threads=8,
+    max_iterations=1000
+)
+from sdpb_interface import SDPBSolver
+solver = SDPBSolver(config)
+bound = solver.find_bound(0.518, 1.41, max_deriv=21)
+```
 
 ## Cluster Execution
 
@@ -100,31 +171,29 @@ python collect_and_plot.py --results-dir results_0.500_0.650
 
 ## Known Issues & Limitations
 
-### Numerical Instability
+### Numerical Precision
 
-High-order derivatives (m > 7) become unstable due to finite-difference errors. Solutions:
-- Use automatic differentiation (JAX, PyTorch)
-- Implement symbolic/rational arithmetic for conformal blocks
-- Use Chebyshev approximation
+- **Finite differences** (m > 7): Unstable due to error accumulation
+  - ✅ **SOLVED**: Use Taylor series expansion (`taylor_conformal_blocks.py`)
 
-### LP vs SDP
+- **CVXPY SDP** (11+ constraints): Condition numbers grow to 10^15
+  - ✅ **SOLVED**: Use SDPB integration (`sdpb_interface.py`)
 
-The current LP formulation checks if crossing can be satisfied by sampling operator dimensions. This is weaker than the proper SDP approach which finds the optimal functional.
+### Current Gap to Literature
 
-For publication-quality bounds:
-```bash
-pip install cvxpy
-python run_bootstrap.py --method sdp
-```
+Our Δε' bounds are ~1.3 units below El-Showk et al. (2012). Causes:
 
-Or use [SDPB](https://github.com/davidsd/sdpb), the gold standard.
+| Factor | Our Implementation | Reference | Impact |
+|--------|-------------------|-----------|--------|
+| Derivative constraints | 6-11 | ~60+ | HIGH |
+| Polynomial positivity | Discrete sampling | Continuous | MEDIUM |
+| Mixed correlators | ⟨σσσσ⟩ only | Multiple | HIGH |
 
-### Missing Features
+### Remaining Work for Publication Quality
 
-For the sharp Ising kink, you need:
-1. **Spinning operators** - Especially the stress tensor (Δ=3, ℓ=2)
-2. **Multiple correlators** - ⟨σσσσ⟩, ⟨σσεε⟩, ⟨εεεε⟩
-3. **Gap assumptions** - Known bounds on other operators
+1. **Polynomial positivity constraints** - Enforce α·F_Δ ≥ 0 for ALL Δ ≥ gap
+2. **Mixed correlator bootstrap** - Add ⟨σσεε⟩ and ⟨εεεε⟩ correlators
+3. **More constraints with SDPB** - Enable 60+ derivative constraints
 
 ## Results
 
