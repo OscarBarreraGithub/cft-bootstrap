@@ -225,7 +225,10 @@ def spinning_block_taylor_coeffs(delta: float, ell: int, n_max: int, n_coeffs: i
     # For scalars (ℓ=0), use the exact Dolan-Osborn formula
     if ell == 0:
         # Import from taylor_conformal_blocks module
-        from .taylor_conformal_blocks import g_diagonal_taylor_coeffs
+        try:
+            from .taylor_conformal_blocks import g_diagonal_taylor_coeffs
+        except ImportError:
+            from taylor_conformal_blocks import g_diagonal_taylor_coeffs
         return g_diagonal_taylor_coeffs(delta, 0.5, n_coeffs)
 
     # For spinning operators, compute numerically using high-precision finite differences
@@ -281,7 +284,10 @@ class SpinningCrossingVector:
         self._cache = {}
 
         # For scalars, use the verified Taylor implementation
-        from .taylor_conformal_blocks import TaylorCrossingVector
+        try:
+            from .taylor_conformal_blocks import TaylorCrossingVector
+        except ImportError:
+            from taylor_conformal_blocks import TaylorCrossingVector
         self._taylor_cross = TaylorCrossingVector(delta_sigma, max_deriv)
 
     def _z_from_a(self, a: float) -> float:
@@ -479,7 +485,10 @@ class SpinningBootstrapSolver:
     def _F_identity(self, delta_sigma: float) -> np.ndarray:
         """F-vector for the identity operator."""
         # Import from Taylor module
-        from .taylor_conformal_blocks import F_identity_taylor_coeffs
+        try:
+            from .taylor_conformal_blocks import F_identity_taylor_coeffs
+        except ImportError:
+            from taylor_conformal_blocks import F_identity_taylor_coeffs
 
         coeffs = F_identity_taylor_coeffs(delta_sigma, self.max_deriv + 2)
         # Extract odd coefficients
