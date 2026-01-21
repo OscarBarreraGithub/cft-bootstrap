@@ -109,31 +109,101 @@ python run_bootstrap.py --gap-bound --method sdpb
 
 ---
 
-### 4. Mixed Correlator Bootstrap ⬜ NOT STARTED
+### 4. Mixed Correlator Bootstrap ✅ IMPLEMENTED
 
-**Current:** We use only the ⟨σσσσ⟩ four-point function.
+**Previous:** We used only the ⟨σσσσ⟩ four-point function.
 
 **Problem:** The sharp kink at the Ising point comes from combining multiple correlators.
 
-**Solution:** Include ⟨σσεε⟩ and ⟨εεεε⟩ correlators in the bootstrap system.
+**Solution:** Implemented mixed correlator bootstrap using three four-point functions:
+- ⟨σσσσ⟩ (already had)
+- ⟨σσεε⟩ (NEW - mixed external dimensions)
+- ⟨εεεε⟩ (NEW - energy-only correlator)
+
+**Implementation:** Two new modules:
+- `cft_bootstrap/mixed_correlator_blocks.py` - F-vectors for all three correlators
+- `cft_bootstrap/mixed_correlator_bootstrap.py` - Solvers
+
+**Key Classes:**
+- `MixedCrossingVector`: Computes F-vectors for ssss, ssee, and eeee
+- `TwoCorrelatorBootstrapSolver`: Simplified solver using ssss + eeee (no matrix SDP)
+- `MixedCorrelatorBootstrapSolver`: Full solver with 2×2 matrix SDP constraints
+
+**Mathematical Background:**
+The full mixed correlator constraint uses 2×2 positive semidefinite matrices:
+```
+| α_ssss · F^{ssss}_O    α_ssee · F^{ssee}_O |
+| α_ssee · F^{ssee}_O    α_eeee · F^{eeee}_O |  >> 0
+```
+This captures OPE coefficient correlations (Cauchy-Schwarz inequality).
+
+**Usage:**
+```bash
+# Two-correlator (ssss + eeee, no matrix SDP)
+python run_bootstrap.py --gap-bound --method two-correlator --max-deriv 11
+
+# Full mixed correlator (matrix SDP)
+python run_bootstrap.py --gap-bound --method mixed-correlator --max-deriv 11
+```
 
 **Impact:** Creates the sharp kink that precisely locates the Ising model.
 
-**Complexity:** HIGH - requires setting up a system of crossing equations.
+**References:**
+- El-Showk et al. (2012): arXiv:1203.6064
+- Kos, Poland, Simmons-Duffin (2014): arXiv:1406.4858
 
 ---
 
-### 5. Polynomial Approximation for Positivity ⬜ NOT STARTED
+### 5. Polynomial Approximation for Positivity ✅ IMPLEMENTED
 
-**Current:** We sample operators at discrete Δ values and check positivity at each.
+**Previous:** We sample operators at discrete Δ values and check positivity at each.
 
-**Problem:** Discrete sampling can miss narrow excluded regions.
+**Problem:** Discrete sampling can miss narrow excluded regions and finding the optimal functional.
 
-**Solution:** Use polynomial approximation to enforce positivity for all Δ ≥ Δ_gap.
+**Solution:** Polynomial approximation to enforce positivity for **all** Δ ≥ Δ_gap using sum-of-squares (SOS) decomposition.
 
-**Impact:** More rigorous bounds, matches the paper's methodology exactly.
+**Implementation:** `cft_bootstrap/polynomial_positivity.py`
 
-**Complexity:** MEDIUM - requires polynomial fitting and matrix positivity constraints.
+**Key Classes:**
+- `PolynomialFitter`: Fits F-vectors to polynomials using Chebyshev interpolation
+- `SOSPositivityConstraint`: Builds SOS positivity via Gram matrix SDP constraints
+- `PolynomialPositivitySolver`: Main solver combining polynomial fitting + SOS constraints
+- `PolynomialPositivityGapSolver`: Computes Δε' bounds along curves
+
+**Mathematical Background:**
+A univariate polynomial p(x) is non-negative on [0, ∞) iff:
+```
+p(x) = σ₀(x) + x · σ₁(x)
+```
+where σ₀, σ₁ are sum-of-squares (SOS) polynomials. Each SOS polynomial can be written as:
+```
+σ(x) = v(x)ᵀ Q v(x),  Q ≽ 0
+```
+where v(x) = [1, x, x², ...] is the monomial basis and Q is a positive semidefinite Gram matrix.
+
+**Usage:**
+```bash
+# Gap bound with polynomial positivity
+python run_bootstrap.py --gap-bound --method polynomial --max-deriv 21 --poly-degree 15
+
+# Hybrid method (polynomial + discrete samples)
+python run_bootstrap.py --gap-bound --method hybrid --max-deriv 21
+
+# Ising plot along boundary curve
+python run_bootstrap.py --ising-plot --method polynomial --n-points 25
+
+# Compare methods
+python run_bootstrap.py --compare --max-deriv 11 --poly-degree 12
+```
+
+**Advantages over discrete sampling:**
+1. Continuous positivity enforcement (no gaps between sample points)
+2. Finds optimal linear functional more precisely
+3. SDP size depends on polynomial degree, not sample count
+
+**References:**
+- Parrilo (2003): "Semidefinite programming relaxations for semialgebraic problems"
+- Lasserre (2001): "Global optimization with polynomials and the problem of moments"
 
 ---
 
@@ -152,14 +222,18 @@ Based on current analysis showing the ~1.3 unit gap is likely due to insufficien
 | Priority | Improvement | Impact | Complexity | Status |
 |----------|-------------|--------|------------|--------|
 | ~~1~~ | ~~SDPB integration~~ | ~~HIGH~~ | ~~MEDIUM~~ | ✅ DONE |
-| **1** | **Polynomial positivity** | **HIGH** | MEDIUM | ⬜ Next |
-| 2 | Mixed correlator bootstrap | HIGH | HIGH | ⬜ |
-| 3 | More constraints via SDPB | MEDIUM | LOW | ⬜ |
+| ~~2~~ | ~~Polynomial positivity~~ | ~~HIGH~~ | ~~MEDIUM~~ | ✅ DONE |
+| ~~3~~ | ~~Mixed correlator bootstrap~~ | ~~HIGH~~ | ~~HIGH~~ | ✅ DONE |
+| **1** | **More constraints via SDPB** | **MEDIUM** | LOW | ⬜ Next |
 
-**Note:** Taylor series, spinning operators, and SDPB interface have been implemented. The remaining gap is likely due to:
-1. Discrete sampling vs polynomial positivity (next priority)
-2. Single correlator vs mixed correlator bootstrap
-3. Need to run with SDPB installed for 60+ constraints
+**Note:** All major algorithmic improvements have been implemented:
+- Taylor series for high-order derivatives
+- Spinning operators via radial expansion
+- SDPB interface for high-precision arithmetic
+- Polynomial positivity via SOS decomposition
+- Mixed correlator bootstrap (ssss + ssee + eeee)
+
+The remaining gap to literature values can be closed by running with SDPB installed for 60+ constraints.
 
 ## Progress Tracking
 
@@ -174,14 +248,15 @@ Based on current analysis showing the ~1.3 unit gap is likely due to insufficien
 - [x] Spinning conformal blocks (radial expansion)
 - [x] Analysis of constraint power requirements
 - [x] **SDPB integration** (JSON PMP format, fallback to CVXPY)
+- [x] **Polynomial positivity constraints** (SOS decomposition via Gram matrices)
+- [x] **Mixed correlator bootstrap** (ssss + ssee + eeee with matrix SDP)
 
 ### In Progress 🔄
 - [ ] None currently
 
 ### Not Started ⬜
-- [ ] Polynomial approximation for positivity (next priority)
-- [ ] Mixed correlator bootstrap
 - [ ] Running with SDPB installed for 60+ constraints
+- [ ] Extensive numerical validation against literature
 
 ---
 
@@ -189,10 +264,15 @@ Based on current analysis showing the ~1.3 unit gap is likely due to insufficien
 
 | After Implementing | Expected Δε' at Ising | Gap to Reference |
 |--------------------|----------------------|------------------|
-| Current (scalars + spinning, 6 constraints) | ~2.5 | ~1.3 |
+| Discrete sampling (6 constraints) | ~2.5 | ~1.3 |
+| + Polynomial positivity (11 constraints) | ~2.5-2.8 | ~1.0-1.3 |
 | + SDPB + 20 constraints | ~3.0-3.3 | ~0.5-0.8 |
-| + Polynomial positivity | ~3.5-3.7 | ~0.1-0.3 |
+| + Mixed correlator bootstrap | ~3.5-3.8 | ~0-0.3 |
 | + All improvements | ~3.8 | ~0 |
+
+**Note:** Polynomial positivity improves the *quality* of bounds (more rigorous continuous
+positivity) but the main numerical improvement requires more constraints via SDPB and
+mixed correlators to get the sharp kink at the Ising point.
 
 ---
 
@@ -202,8 +282,13 @@ Based on current analysis showing the ~1.3 unit gap is likely due to insufficien
 - `cft_bootstrap/bootstrap_gap_solver.py` - Gap-based solver for Δε' bounds
 - `cft_bootstrap/taylor_conformal_blocks.py` - Taylor series implementation for scalars
 - `cft_bootstrap/spinning_conformal_blocks.py` - Spinning conformal blocks (radial expansion)
-- `cft_bootstrap/sdpb_interface.py` - **NEW** SDPB integration module
-- `cft_bootstrap/run_bootstrap.py` - CLI with `--gap-bound` and `--method sdpb` options
+- `cft_bootstrap/sdpb_interface.py` - SDPB integration module
+- `cft_bootstrap/polynomial_positivity.py` - Polynomial positivity via SOS constraints
+- `cft_bootstrap/mixed_correlator_blocks.py` - F-vectors for mixed correlators
+- `cft_bootstrap/mixed_correlator_bootstrap.py` - Mixed correlator bootstrap solvers
+- `cft_bootstrap/run_bootstrap.py` - CLI with `--method two-correlator/mixed-correlator`
+- `cft_bootstrap/tests/test_mixed_correlator.py` - Tests for mixed correlator bootstrap
+- `cft_bootstrap/tests/test_polynomial_positivity.py` - Tests for polynomial positivity
 - `notebooks/reproduce_ising_delta_epsilon_prime.ipynb` - Jupyter notebook
 - `reference_plots/` - Comparison plots
 

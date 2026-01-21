@@ -1,0 +1,28 @@
+# CFT Bootstrap Environment
+# Install: conda env create -f environment.yml
+# Activate: conda activate cft-bootstrap
+
+name: cft-bootstrap
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python>=3.10
+  - numpy>=1.20
+  - scipy>=1.7
+  - matplotlib>=3.4
+  - pip
+  - pip:
+    - cvxpy>=1.2
+    # Optional: better SDP solvers (if you have licenses)
+    # - mosek
+    # - cvxopt
+
+# Note: For SDPB (high-precision bootstrap):
+#   macOS: brew tap davidsd/sdpb && brew install sdpb
+#   Linux: See https://github.com/davidsd/sdpb
+
+# Note: For Mathematica integration:
+#   Requires Wolfram Mathematica license
+#   The Wolfram MCP server connects Claude to Mathematica
