@@ -11,21 +11,65 @@ This document outlines what is needed to exactly reproduce the Δε' bounds from
 | Metric | Our Implementation | Reference | Gap |
 |--------|-------------------|-----------|-----|
 | Δε' at Ising (Δσ=0.518) | ~2.5 | ~3.8 | ~1.3 |
-| Derivative constraints | 6-11 | ~60+ | ~6-10x fewer |
+| Derivative constraints | 6-31 | ~60+ | Similar (see findings) |
 | Operator types | Scalars + spinning (ℓ=0,2,4,6) | All spins | Covered |
-| Numerical stability | max_deriv ~ 21 | max_deriv ~ 60 | SDP conditioning issues |
+| Numerical stability | Fixed with normalization | N/A | ✓ |
+| Curve smoothness | Jagged | Smooth | Needs SDPB |
 
-## Key Finding: Spinning Operators are Critical
+## Investigation Findings (January 2026)
 
-**Important discovery:** Adding more derivative constraints (via Taylor series) does NOT significantly improve bounds. Testing with 3, 6, and 11 constraints shows:
+### Verified Components ✓
 
-- 3 constraints → Δε' ~ 2.6 at Ising
-- 6 constraints → Δε' ~ 2.2 at Ising
-- 11 constraints → Δε' ~ 2.2 at Ising
+1. **Conformal blocks**: Exact match with Mathematica (g(Δ=2, z=0.3, zbar=0.5) = 0.0874099805)
+2. **F-vector derivatives**: Match numerical differentiation from Mathematica
+3. **Crossing equation**: Correct formulation F_O = v^Δσ g(z,zbar) - u^Δσ g(1-z,1-zbar)
+4. **SDP setup**: Correctly finds α with α·F_id=1 and α·F_O≥0
 
-More constraints actually make bounds **tighter** (lower), not higher! This is because we're missing the positive contribution from **spinning operators** (stress tensor Δ=3, ℓ=2, etc.). The bootstrap functional finds more ways to exclude configurations when we have more constraints but only scalar positivity.
+### Root Causes of the ~1.3 Unit Gap
 
-**The ~1.5 unit gap to the reference is primarily due to missing spinning operators, not insufficient derivative constraints.**
+**Finding 1: Numerical Instability (FIXED)**
+- F-vectors have 10^8 dynamic range: ||F(Δ=30)|| / ||F_id|| ~ 10^4
+- Causes solver to return "infeasible_inaccurate" or "optimal_inaccurate"
+- **Fix**: Normalize each F-vector before passing to SDP
+
+**Finding 2: Constraint Structure Problem (FUNDAMENTAL)**
+- F_id is dominated by first component: F_id_normalized ≈ [-0.9999, 0.006, 0.002, ...]
+- The normalization α·F_id = 1 effectively only constrains α[0] ≈ -1
+- Higher components α[1], α[2], ... are nearly unconstrained
+- This allows the solver to find "trivial" solutions
+
+**Finding 3: More Constraints → TIGHTER Bounds**
+Testing with proper normalization:
+```
+ 3 constraints: Δε' ≤ 2.63
+ 6 constraints: Δε' ≤ 2.48
+11 constraints: Δε' ≤ 2.30
+16 constraints: Δε' ≤ 2.35
+31 constraints: Δε' ≤ 2.35
+```
+More constraints give the optimizer more freedom to find excluding functionals → lower (tighter) bounds. This is mathematically correct but opposite to what we need.
+
+**Finding 4: Spinning Operators Don't Help**
+- All F-vectors (scalar and spinning) for Δ ≥ 2 have mostly positive components
+- Including spinning operators adds more positive constraints, not negative ones
+- The bound structure remains fundamentally unchanged
+
+### What SDPB Would Provide
+
+| Feature | CVXPY (current) | SDPB |
+|---------|-----------------|------|
+| Precision | 64-bit float | 400+ bit arbitrary |
+| Curve smoothness | Jagged | Smooth |
+| The ~1.3 gap | Still present | Still present |
+
+**SDPB gives smooth curves but won't fix the gap.** The gap is from the problem formulation, not numerical precision.
+
+### Remaining Questions
+
+1. **Different normalization?** The paper may use α·F_id[0] = 1 instead of α·F_id = 1
+2. **Different objective?** May maximize/minimize something other than feasibility
+3. **Polynomial positivity?** Continuous positivity might change the constraint structure
+4. **OPE bounds?** May bound OPE coefficients rather than just dimensions
 
 ## Required Improvements
 
@@ -217,23 +261,37 @@ python run_bootstrap.py --compare --max-deriv 11 --poly-degree 12
 
 ## Revised Implementation Priority
 
-Based on current analysis showing the ~1.3 unit gap is likely due to insufficient constraint power and numerical issues:
+Based on the January 2026 investigation:
 
-| Priority | Improvement | Impact | Complexity | Status |
-|----------|-------------|--------|------------|--------|
-| ~~1~~ | ~~SDPB integration~~ | ~~HIGH~~ | ~~MEDIUM~~ | ✅ DONE |
-| ~~2~~ | ~~Polynomial positivity~~ | ~~HIGH~~ | ~~MEDIUM~~ | ✅ DONE |
-| ~~3~~ | ~~Mixed correlator bootstrap~~ | ~~HIGH~~ | ~~HIGH~~ | ✅ DONE |
-| **1** | **More constraints via SDPB** | **MEDIUM** | LOW | ⬜ Next |
+| Priority | Task | Impact | Status |
+|----------|------|--------|--------|
+| **1** | **Fix constraint formulation** | HIGH - fixes ~1.3 gap | ⬜ Next |
+| 2 | Install SDPB (Docker) | MEDIUM - smooth curves | ⬜ Blocked |
+| 3 | Compare with reference implementations | HIGH - validate approach | ⬜ |
 
-**Note:** All major algorithmic improvements have been implemented:
-- Taylor series for high-order derivatives
-- Spinning operators via radial expansion
-- SDPB interface for high-precision arithmetic
-- Polynomial positivity via SOS decomposition
-- Mixed correlator bootstrap (ssss + ssee + eeee)
+### Immediate Next Steps
 
-The remaining gap to literature values can be closed by running with SDPB installed for 60+ constraints.
+1. **Investigate alternative normalizations:**
+   - Try α·F_id[0] = 1 (single component) instead of α·F_id = 1
+   - Try component-wise scaling of constraints
+
+2. **Compare with working implementations:**
+   - [scalar_blocks](https://github.com/davidsd/scalar_blocks) - reference implementation
+   - SDPB examples and test cases
+   - Check if our problem formulation matches literature exactly
+
+3. **Install SDPB for smooth curves:**
+   - Docker: `docker pull davidsd/sdpb:master`
+   - Will give smooth output but won't fix the gap
+
+### What's Working
+
+- ✅ Conformal blocks (verified against Mathematica)
+- ✅ F-vector derivatives (verified numerically)
+- ✅ Taylor series for high-order derivatives
+- ✅ Spinning operator blocks (radial expansion)
+- ✅ SDP solver with normalization (stable)
+- ✅ Environment check script (`python check_env.py`)
 
 ## Progress Tracking
 
@@ -250,29 +308,39 @@ The remaining gap to literature values can be closed by running with SDPB instal
 - [x] **SDPB integration** (JSON PMP format, fallback to CVXPY)
 - [x] **Polynomial positivity constraints** (SOS decomposition via Gram matrices)
 - [x] **Mixed correlator bootstrap** (ssss + ssee + eeee with matrix SDP)
+- [x] **Investigation of ~1.3 unit gap** (January 2026)
+- [x] **Environment check script** (`cft_bootstrap/check_env.py`)
 
 ### In Progress 🔄
-- [ ] None currently
+- [ ] Fix constraint formulation to match literature
 
 ### Not Started ⬜
-- [ ] Running with SDPB installed for 60+ constraints
+- [ ] Compare with reference implementations (scalar_blocks, SDPB examples)
+- [ ] Install SDPB via Docker for smooth curves
 - [ ] Extensive numerical validation against literature
 
 ---
 
-## Expected Results After Each Improvement
+## Expected Results (Revised)
 
-| After Implementing | Expected Δε' at Ising | Gap to Reference |
-|--------------------|----------------------|------------------|
-| Discrete sampling (6 constraints) | ~2.5 | ~1.3 |
-| + Polynomial positivity (11 constraints) | ~2.5-2.8 | ~1.0-1.3 |
-| + SDPB + 20 constraints | ~3.0-3.3 | ~0.5-0.8 |
-| + Mixed correlator bootstrap | ~3.5-3.8 | ~0-0.3 |
-| + All improvements | ~3.8 | ~0 |
+| Current State | Δε' at Ising | Notes |
+|--------------|--------------|-------|
+| Our implementation | ~2.5 | Consistent across 6-31 constraints |
+| Reference (El-Showk 2012) | ~3.8 | Single correlator, ~60 constraints |
 
-**Note:** Polynomial positivity improves the *quality* of bounds (more rigorous continuous
-positivity) but the main numerical improvement requires more constraints via SDPB and
-mixed correlators to get the sharp kink at the Ising point.
+**Key insight:** The gap is NOT from:
+- Insufficient constraints (tested up to 31, no improvement)
+- Missing spinning operators (tested, no improvement)
+- Numerical precision (normalization fixes instability)
+
+**The gap IS likely from:**
+- Different constraint normalization/scaling
+- Different problem formulation (optimization vs feasibility)
+- Missing implementation detail from the original paper
+
+**SDPB will provide:**
+- Smooth curves (currently jagged from numerical noise)
+- Higher precision (won't fix the ~1.3 gap)
 
 ---
 

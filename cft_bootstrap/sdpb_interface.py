@@ -27,12 +27,14 @@ References:
 Installation:
     SDPB must be installed separately. See https://github.com/davidsd/sdpb
 
-    On macOS with Homebrew:
-        brew tap davidsd/sdpb
-        brew install sdpb
+    Docker (recommended for macOS/Windows):
+        docker pull davidsd/sdpb:master
 
-    On Linux:
-        Use Docker/Singularity or build from source (see SDPB docs)
+    Singularity (recommended for Linux/HPC):
+        See https://github.com/davidsd/sdpb/blob/master/docs/Singularity.md
+
+    From source:
+        See https://github.com/davidsd/sdpb/blob/master/Install.md
 
 Usage:
     >>> solver = SDPBSolver(sdpb_path="/usr/local/bin/sdpb")
@@ -345,7 +347,7 @@ class SDPBSolver:
         if not self._sdpb_available:
             warnings.warn(
                 "SDPB not found. Install SDPB from https://github.com/davidsd/sdpb\n"
-                "On macOS: brew tap davidsd/sdpb && brew install sdpb\n"
+                "Docker: docker pull davidsd/sdpb:master\n"
                 "The solver will fall back to CVXPY if available."
             )
 
