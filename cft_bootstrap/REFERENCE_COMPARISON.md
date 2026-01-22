@@ -280,6 +280,96 @@ After this comparison, we should know:
 
 ---
 
+---
+
+## Critical Findings from External Review (January 2026)
+
+### Issue 1: Figure Numbering Error
+
+**Problem:** Our repo claims to reproduce "El-Showk 2012 Fig. 7 (Δε')" but:
+- **Figure 7 in the paper is a spin-2 (T') bound**
+- **Figure 6 is the Δε' bound we actually want**
+
+**Action:** Rename `el_showk_2012_fig7_delta_epsilon_prime.png` to `fig6` and update all references.
+
+### Issue 2: Two-Stage Pipeline Missing
+
+**Problem:** The paper's Figure 6 protocol is:
+1. For each Δσ, compute **Δε,max(Δσ)** (the boundary of allowed region, from Fig. 3)
+2. Then with **Δε fixed to that Δε,max(Δσ)**, compute maximal allowed **Δε'**
+
+**Our current approach:** We use hardcoded literature values for Δε (e.g., 1.41 at Ising point), not self-consistently computed boundaries.
+
+**Action:** Implement the two-stage scan:
+```python
+# Stage 1: Compute Δε boundary for each Δσ
+delta_epsilon_max = compute_delta_epsilon_bound(delta_sigma)
+
+# Stage 2: With Δε fixed to boundary, compute Δε' bound
+delta_epsilon_prime_bound = compute_gap_bound(delta_sigma, delta_epsilon_max)
+```
+
+### Issue 3: Paper's Discretization Strategy (Tables T1-T5)
+
+**Problem:** The paper uses 5 different operator tables with different resolutions:
+
+| Table | δ (step) | Δmax | Lmax |
+|-------|----------|------|------|
+| T1 | 2×10⁻⁵ | 3 | 0 |
+| T2 | 5×10⁻⁴ | 8 | 6 |
+| T3 | 2×10⁻³ | 22 | 20 |
+| T4 | 0.02 | 100 | 50 |
+| T5 | 1 | 500 | 100 |
+
+**Our current approach:** Single coarse Δ grid, scalars only, single cutoff.
+
+**Action:** Implement multi-resolution discretization matching Table 2 from the paper.
+
+### Issue 4: Derivative Order
+
+**Problem:** Paper uses `nmax=10` which gives (nmax+1)(nmax+2)/2 = **66 coefficients**.
+
+The functional is:
+```
+Λ = Σ_{m+2n ≤ 2nmax+1} λ_{m,n} ∂_a^m ∂_b^n F(a,b)|_{a=1,b=0}
+```
+where (a,b) are the paper's variables (Section 4), and only odd a-derivatives contribute.
+
+**Our current approach:** Only 3-11 derivative constraints.
+
+**Action:** Implement full derivative basis in (a,b) coordinates at (a=1, b=0).
+
+### Issue 5: Spinning Operators
+
+**Problem:** The σ×σ OPE contains all even spins. Paper goes up to **Lmax=100**.
+
+**Our current approach:** Scalars only (spin-0).
+
+**Action:** Include spinning operators with spin l = 0, 2, 4, ..., up to at least Lmax=50.
+
+### Issue 6: Solver Differences
+
+**Problem:** Paper used **IBM ILOG CPLEX (dual simplex)**.
+
+**Our current approach:** CVXPY with SCS backend.
+
+**Impact:** May cause numerical differences but shouldn't cause 1+ unit gap if formulation is correct.
+
+---
+
+## Updated Minimal Checklist for Reproduction
+
+To reproduce the reference Δε' curve (paper Figure 6), we need:
+
+- [ ] **Fix figure reference**: Target Fig. 6, not Fig. 7
+- [ ] **Two-stage scan**: Compute Δε,max(Δσ) first, then Δε' with Δε fixed to boundary
+- [ ] **Derivative basis**: Implement full nmax=10 (66 coefficients) in (a,b) coordinates
+- [ ] **Spinning operators**: Include spins l = 0, 2, 4, ... up to Lmax ≥ 50
+- [ ] **Multi-resolution discretization**: Implement T1-T5 style tables
+- [ ] **LP numerics**: Match tolerances to serious LP solver
+
+---
+
 ## Contact
 
 If you find the discrepancy, please update:

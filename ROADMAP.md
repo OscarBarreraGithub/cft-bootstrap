@@ -338,22 +338,83 @@ Implemented the pycftboot-style reshuffling normalization across all solvers:
 
 | Current State | Δε' at Ising | Notes |
 |--------------|--------------|-------|
-| Our implementation | ~2.5 | Consistent across 6-31 constraints |
-| Reference (El-Showk 2012) | ~3.8 | Single correlator, ~60 constraints |
+| Our implementation | ~2.6 | Consistent across 6-31 constraints |
+| Reference (El-Showk 2012) | ~3.8 | Single correlator, ~66 coefficients (nmax=10) |
 
-**Key insight:** The gap is NOT from:
-- Insufficient constraints (tested up to 31, no improvement)
-- Missing spinning operators (tested, no improvement)
-- Numerical precision (normalization fixes instability)
+---
 
-**The gap IS likely from:**
-- Different constraint normalization/scaling
-- Different problem formulation (optimization vs feasibility)
-- Missing implementation detail from the original paper
+## Critical Findings: External Review (January 2026)
 
-**SDPB will provide:**
-- Smooth curves (currently jagged from numerical noise)
-- Higher precision (won't fix the ~1.3 gap)
+An external review identified several fundamental issues with our approach:
+
+### 1. Figure Numbering Error
+- **We claim:** Reproducing "El-Showk 2012 Fig. 7 (Δε')"
+- **Reality:** Paper Fig. 7 is a **spin-2 (T') bound**; **Fig. 6** is the Δε' bound
+- **Action:** Rename reference files and target Fig. 6
+
+### 2. Two-Stage Pipeline Missing (CRITICAL)
+The paper's Fig. 6 uses a two-stage protocol:
+1. For each Δσ, compute **Δε,max(Δσ)** (boundary from Fig. 3, using nmax=11)
+2. Then with **Δε fixed to that computed Δε,max**, compute Δε' bound (nmax=10)
+
+**Our current approach:** We use hardcoded/literature Δε values (e.g., 1.41), NOT the self-consistently computed boundary. This is fundamentally different from the paper's protocol.
+
+### 3. Paper's Multi-Resolution Discretization
+The paper uses **5 operator tables** (Table 2, Appendix D):
+
+| Table | Step δ | Δmax | Lmax |
+|-------|--------|------|------|
+| T1 | 2×10⁻⁵ | 3 | 0 |
+| T2 | 5×10⁻⁴ | 8 | 6 |
+| T3 | 2×10⁻³ | 22 | 20 |
+| T4 | 0.02 | 100 | 50 |
+| T5 | 1 | 500 | 100 |
+
+**Our approach:** Single coarse grid, single cutoff → fundamentally different discretization.
+
+### 4. Derivative Basis & Order
+Paper uses nmax=10 → **(nmax+1)(nmax+2)/2 = 66 coefficients**
+
+Functional form:
+```
+Λ = Σ_{m+2n ≤ 2nmax+1} λ_{m,n} ∂_a^m ∂_b^n F(a,b)|_{a=1,b=0}
+```
+where (a,b) are paper's coordinates (Section 4), only odd a-derivatives contribute.
+
+**Our approach:** 3-31 derivatives in (z,zbar) coordinates → different basis.
+
+### 5. Spinning Operators Required
+Paper's σ×σ OPE includes **all even spins up to Lmax=100**.
+**Our approach:** Scalars only → missing significant constraint power.
+
+### 6. Solver Differences
+Paper: **IBM ILOG CPLEX (dual simplex)**
+Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
+
+---
+
+## Revised Action Items (Priority Order)
+
+| Priority | Task | Impact | Status |
+|----------|------|--------|--------|
+| **1** | **Fix figure reference** (Fig. 6 not Fig. 7) | Correctness | ⬜ Next |
+| **2** | **Implement two-stage pipeline** | CRITICAL - may fix gap | ⬜ |
+| **3** | **Add spinning operators (Lmax≥50)** | HIGH | ⬜ |
+| **4** | **Implement (a,b) derivative basis with nmax=10** | HIGH | ⬜ |
+| **5** | **Multi-resolution discretization (T1-T5)** | MEDIUM | ⬜ |
+| 6 | Install SDPB for smooth curves | LOW | ⬜ |
+
+### Minimal Checklist for Fig. 6 Reproduction
+
+- [ ] Rename files: `fig7` → `fig6`
+- [ ] Implement two-stage scan (Δε boundary first, then Δε' with Δε fixed)
+- [ ] Implement (a,b) coordinate derivatives at (a=1, b=0)
+- [ ] Increase to nmax=10 (66 coefficients)
+- [ ] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50
+- [ ] Implement T1-T5 multi-resolution discretization
+- [ ] Match LP tolerances to serious solver
+
+See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
 
 ---
 
