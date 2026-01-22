@@ -265,22 +265,34 @@ Based on the January 2026 investigation:
 
 | Priority | Task | Impact | Status |
 |----------|------|--------|--------|
-| **1** | **Fix constraint formulation** | HIGH - fixes ~1.3 gap | ⬜ Next |
+| **1** | **Fix constraint formulation** | Tested - doesn't fix gap | ✅ Done |
 | 2 | Install SDPB (Docker) | MEDIUM - smooth curves | ⬜ Blocked |
-| 3 | Compare with reference implementations | HIGH - validate approach | ⬜ |
+| 3 | Compare with reference implementations | HIGH - validate approach | ⬜ Next |
+
+### January 2026 Update: pycftboot-style Normalization
+
+Implemented the pycftboot-style reshuffling normalization across all solvers:
+- `bootstrap_gap_solver.py` - `reshuffle_with_normalization()` function
+- `taylor_conformal_blocks.py` - `HighOrderGapBootstrapSolver`
+- `polynomial_positivity.py` - `PolynomialPositivitySolver`
+- `mixed_correlator_bootstrap.py` - `TwoCorrelatorBootstrapSolver`, `MixedCorrelatorBootstrapSolver`
+
+**Result:** Bound improved slightly from ~2.5 to ~2.6, but the ~1.2 unit gap to reference (~3.8) persists.
+
+**Conclusion:** The gap is NOT primarily due to normalization convention. The reference paper likely uses a fundamentally different problem formulation, possibly:
+- Different objective function (not just feasibility)
+- Different handling of the positivity constraints
+- Additional constraints we're not implementing
 
 ### Immediate Next Steps
 
-1. **Investigate alternative normalizations:**
-   - Try α·F_id[0] = 1 (single component) instead of α·F_id = 1
-   - Try component-wise scaling of constraints
-
-2. **Compare with working implementations:**
+1. **Compare with working implementations:**
    - [scalar_blocks](https://github.com/davidsd/scalar_blocks) - reference implementation
+   - [pycftboot](https://github.com/cbehan/pycftboot) - Python bootstrap implementation
    - SDPB examples and test cases
    - Check if our problem formulation matches literature exactly
 
-3. **Install SDPB for smooth curves:**
+2. **Install SDPB for smooth curves:**
    - Docker: `docker pull davidsd/sdpb:master`
    - Will give smooth output but won't fix the gap
 
@@ -291,6 +303,7 @@ Based on the January 2026 investigation:
 - ✅ Taylor series for high-order derivatives
 - ✅ Spinning operator blocks (radial expansion)
 - ✅ SDP solver with normalization (stable)
+- ✅ pycftboot-style reshuffling normalization
 - ✅ Environment check script (`python check_env.py`)
 
 ## Progress Tracking
@@ -310,12 +323,12 @@ Based on the January 2026 investigation:
 - [x] **Mixed correlator bootstrap** (ssss + ssee + eeee with matrix SDP)
 - [x] **Investigation of ~1.3 unit gap** (January 2026)
 - [x] **Environment check script** (`cft_bootstrap/check_env.py`)
+- [x] **pycftboot-style reshuffling normalization** (January 2026) - doesn't fix gap
 
 ### In Progress 🔄
-- [ ] Fix constraint formulation to match literature
+- [ ] Compare with reference implementations to identify formulation differences
 
 ### Not Started ⬜
-- [ ] Compare with reference implementations (scalar_blocks, SDPB examples)
 - [ ] Install SDPB via Docker for smooth curves
 - [ ] Extensive numerical validation against literature
 

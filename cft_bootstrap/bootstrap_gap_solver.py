@@ -40,7 +40,57 @@ except ImportError:
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-from .bootstrap_solver import ConformalBlock3D, CrossingVector
+try:
+    from .bootstrap_solver import ConformalBlock3D, CrossingVector
+except ImportError:
+    from bootstrap_solver import ConformalBlock3D, CrossingVector
+
+
+def reshuffle_with_normalization(F_vectors: np.ndarray, F_norm: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Reshuffle F-vectors using component-wise normalization (pycftboot/SDPB convention).
+
+    This transforms F-vectors to eliminate the normalization constraint.
+    For each F-vector F_O, we compute:
+        const_O = F_O[max_idx] / F_norm[max_idx]
+        F_O_transformed = F_O - const_O * F_norm  (for all components except max_idx)
+
+    The const_O values represent something like OPE coefficient ratios.
+    After this transformation:
+    - The original α · F_norm = 1 becomes just fixing the coefficient of const_O
+    - The transformed F-vectors have F_O_transformed[max_idx] = 0 by construction
+
+    Args:
+        F_vectors: Array of F-vectors, shape (n_operators, n_constraints)
+        F_norm: Normalization vector (typically F_identity)
+
+    Returns:
+        Tuple of (reduced_F_vectors, const_coeffs, max_idx) where:
+        - reduced_F_vectors: shape (n_operators, n_constraints - 1) - transformed & reduced
+        - const_coeffs: shape (n_operators,) - the const values (relate to OPE coefficients)
+        - max_idx: index of the eliminated component
+    """
+    max_idx = np.argmax(np.abs(F_norm))
+    n_ops, n_cons = F_vectors.shape
+
+    # For each operator, compute const = F_O[max_idx] / F_norm[max_idx]
+    const_coeffs = F_vectors[:, max_idx] / F_norm[max_idx]
+
+    # Transform F-vectors: F_O_transformed = F_O - const * F_norm
+    # This makes F_O_transformed[max_idx] = 0 by construction
+    F_transformed = np.zeros((n_ops, n_cons))
+    for i in range(n_ops):
+        F_transformed[i, :] = F_vectors[i, :] - const_coeffs[i] * F_norm
+
+    # Remove the max_idx column (which is now all zeros)
+    reduced = np.zeros((n_ops, n_cons - 1))
+    j = 0
+    for k in range(n_cons):
+        if k != max_idx:
+            reduced[:, j] = F_transformed[:, k]
+            j += 1
+
+    return reduced, const_coeffs, max_idx
 
 
 class GapBootstrapSolver:
@@ -150,22 +200,44 @@ class GapBootstrapSolver:
         """
         SDP feasibility check (gives CORRECT bounds).
 
-        Find α such that:
+        Uses component-wise normalization (pycftboot/SDPB convention):
+        1. Find the largest-magnitude component in F_id
+        2. Fix alpha[max_idx] = 1 / F_id[max_idx]
+        3. Solve reduced SDP for remaining alpha components
+
+        The original constraints:
             α · F_id = 1 (normalization)
             α · F_eps ≥ 0 (first scalar OK)
             α · F_Δ ≥ 0 for all Δ ≥ Δε' (positivity)
 
-        If such α exists, point is EXCLUDED.
-        """
-        alpha = cp.Variable(self.n_constraints)
+        Become (after substitution):
+            alpha_reduced @ F_eps_reduced >= -fixed_eps
+            alpha_reduced @ F_O_reduced >= -fixed_O for each operator
 
+        If such alpha_reduced exists, point is EXCLUDED.
+        """
+        # Stack all F-vectors for reshuffling
+        F_all = np.vstack([F_eps[np.newaxis, :], F_ops])
+
+        # Apply component-wise normalization
+        F_reduced, fixed_contribs, max_idx = reshuffle_with_normalization(F_all, F_id)
+
+        # Separate epsilon and other operators
+        F_eps_reduced = F_reduced[0, :]
+        fixed_eps = fixed_contribs[0]
+        F_ops_reduced = F_reduced[1:, :]
+        fixed_ops = fixed_contribs[1:]
+
+        # Reduced alpha has n_constraints - 1 components
+        alpha_reduced = cp.Variable(self.n_constraints - 1)
+
+        # Build constraints with the fixed contribution moved to RHS
         constraints = [
-            alpha @ F_id == 1,
-            alpha @ F_eps >= 0,
+            alpha_reduced @ F_eps_reduced >= -fixed_eps,
         ]
 
-        for F_O in F_ops:
-            constraints.append(alpha @ F_O >= 0)
+        for i, F_O_reduced in enumerate(F_ops_reduced):
+            constraints.append(alpha_reduced @ F_O_reduced >= -fixed_ops[i])
 
         prob = cp.Problem(cp.Minimize(0), constraints)
 

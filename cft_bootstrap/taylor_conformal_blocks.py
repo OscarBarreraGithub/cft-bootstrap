@@ -21,6 +21,11 @@ from scipy.special import gamma, poch
 from typing import Tuple, Optional, Callable
 import warnings
 
+try:
+    from .bootstrap_gap_solver import reshuffle_with_normalization
+except ImportError:
+    from bootstrap_gap_solver import reshuffle_with_normalization
+
 
 def hyp2f1_value(a: float, b: float, c: float, z: float) -> float:
     """
@@ -420,18 +425,38 @@ class HighOrderGapBootstrapSolver:
         F_eps: np.ndarray,
         F_ops: np.ndarray
     ) -> bool:
-        """SDP feasibility check."""
+        """
+        SDP feasibility check using component-wise normalization.
+
+        Uses the pycftboot/SDPB convention:
+        1. Find the largest-magnitude component in F_id
+        2. Fix alpha[max_idx] = 1 / F_id[max_idx]
+        3. Solve reduced SDP for remaining alpha components
+        """
         import cvxpy as cp
 
-        alpha = cp.Variable(self.n_constraints)
+        # Stack all F-vectors for reshuffling
+        F_all = np.vstack([F_eps[np.newaxis, :], F_ops])
 
+        # Apply component-wise normalization
+        F_reduced, fixed_contribs, max_idx = reshuffle_with_normalization(F_all, F_id)
+
+        # Separate epsilon and other operators
+        F_eps_reduced = F_reduced[0, :]
+        fixed_eps = fixed_contribs[0]
+        F_ops_reduced = F_reduced[1:, :]
+        fixed_ops = fixed_contribs[1:]
+
+        # Reduced alpha has n_constraints - 1 components
+        alpha_reduced = cp.Variable(self.n_constraints - 1)
+
+        # Build constraints with the fixed contribution moved to RHS
         constraints = [
-            alpha @ F_id == 1,
-            alpha @ F_eps >= 0,
+            alpha_reduced @ F_eps_reduced >= -fixed_eps,
         ]
 
-        for F_O in F_ops:
-            constraints.append(alpha @ F_O >= 0)
+        for i, F_O_reduced in enumerate(F_ops_reduced):
+            constraints.append(alpha_reduced @ F_O_reduced >= -fixed_ops[i])
 
         prob = cp.Problem(cp.Minimize(0), constraints)
 

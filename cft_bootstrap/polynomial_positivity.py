@@ -69,8 +69,10 @@ except ImportError:
 # Import local modules
 try:
     from .taylor_conformal_blocks import TaylorCrossingVector, build_F_vector_taylor
+    from .bootstrap_gap_solver import reshuffle_with_normalization
 except ImportError:
     from taylor_conformal_blocks import TaylorCrossingVector, build_F_vector_taylor
+    from bootstrap_gap_solver import reshuffle_with_normalization
 
 
 # =============================================================================
@@ -505,6 +507,87 @@ class SOSPositivityConstraint:
 
         return constraints, Q0, Q1
 
+    def build_constraints_cvxpy_with_fixed(
+        self,
+        coefficients: np.ndarray,
+        alpha: cp.Variable,
+        fixed_coeffs: np.ndarray
+    ) -> Tuple[List, cp.Variable, Optional[cp.Variable]]:
+        """
+        Build CVXPY constraints for α_reduced · p_reduced(x) + fixed_poly(x) ≥ 0 on [0, ∞).
+
+        This is a variant of build_constraints_cvxpy that handles the case where
+        one component of α is fixed (for component-wise normalization).
+
+        The polynomial constraint becomes:
+            (α_reduced · p_reduced(x) + fixed_poly(x)) ≥ 0  for all x ≥ 0
+
+        Args:
+            coefficients: Reduced coefficient matrix (n_components-1, poly_degree+1)
+            alpha: CVXPY variable for the reduced linear functional
+            fixed_coeffs: Polynomial coefficients from the fixed α component
+
+        Returns:
+            Tuple of (constraints, Q0, Q1) where Q0, Q1 are Gram matrix variables
+        """
+        n_components = coefficients.shape[0]
+        n_coeffs = coefficients.shape[1]  # poly_degree + 1
+
+        # Create Gram matrix variables
+        size0 = self.k0 + 1
+        Q0 = cp.Variable((size0, size0), symmetric=True)
+
+        if self.k1 >= 0:
+            size1 = self.k1 + 1
+            Q1 = cp.Variable((size1, size1), symmetric=True)
+        else:
+            Q1 = None
+
+        constraints = []
+
+        # PSD constraints
+        constraints.append(Q0 >> 0)
+        if Q1 is not None:
+            constraints.append(Q1 >> 0)
+
+        # Coefficient matching constraints with fixed contribution
+        for n in range(n_coeffs):
+            # LHS: coefficient of x^n in (α_reduced · F_reduced(x) + fixed_poly(x))
+            lhs_terms = []
+
+            # Variable contribution from reduced alpha
+            for i in range(n_components):
+                if abs(coefficients[i, n]) > 1e-15:
+                    lhs_terms.append(alpha[i] * coefficients[i, n])
+
+            # Fixed contribution
+            fixed_contrib = fixed_coeffs[n] if n < len(fixed_coeffs) else 0.0
+
+            if lhs_terms:
+                lhs = cp.sum(lhs_terms) + fixed_contrib
+            else:
+                lhs = fixed_contrib
+
+            # RHS: coefficient of x^n in σ₀(x) + x·σ₁(x)
+            rhs_terms = []
+
+            if n in self.map0:
+                for (i, j) in self.map0[n]:
+                    rhs_terms.append(Q0[i, j])
+
+            if Q1 is not None and n >= 1 and (n - 1) in self.map1:
+                for (i, j) in self.map1[n - 1]:
+                    rhs_terms.append(Q1[i, j])
+
+            if rhs_terms:
+                rhs = cp.sum(rhs_terms)
+            else:
+                rhs = 0
+
+            constraints.append(lhs == rhs)
+
+        return constraints, Q0, Q1
+
 
 # =============================================================================
 # Polynomial Positivity Solver
@@ -632,17 +715,28 @@ class PolynomialPositivitySolver:
         # Evaluate polynomial at dense sample points
         F_dense = np.array([poly_F.evaluate(d) for d in delta_samples])
 
-        # Setup CVXPY problem
-        alpha = cp.Variable(self.n_constraints)
+        # Stack all F-vectors for reshuffling (component-wise normalization)
+        F_all = np.vstack([F_eps[np.newaxis, :], F_dense])
+
+        # Apply component-wise normalization (pycftboot/SDPB convention)
+        F_reduced, fixed_contribs, max_idx = reshuffle_with_normalization(F_all, F_id)
+
+        # Separate epsilon and other operators
+        F_eps_reduced = F_reduced[0, :]
+        fixed_eps = fixed_contribs[0]
+        F_dense_reduced = F_reduced[1:, :]
+        fixed_dense = fixed_contribs[1:]
+
+        # Setup CVXPY problem with reduced alpha
+        alpha = cp.Variable(self.n_constraints - 1)
 
         constraints = [
-            alpha @ F_id == 1,
-            alpha @ F_eps >= 0,
+            alpha @ F_eps_reduced >= -fixed_eps,
         ]
 
         # Add positivity constraints at all dense sample points
-        for F_d in F_dense:
-            constraints.append(alpha @ F_d >= 0)
+        for i, F_d_reduced in enumerate(F_dense_reduced):
+            constraints.append(alpha @ F_d_reduced >= -fixed_dense[i])
 
         prob = cp.Problem(cp.Minimize(0), constraints)
 
@@ -699,16 +793,37 @@ class PolynomialPositivitySolver:
         # Build SOS positivity constraint
         sos = SOSPositivityConstraint(self.poly_degree)
 
-        # Setup CVXPY problem
-        alpha = cp.Variable(self.n_constraints)
+        # Apply component-wise normalization (pycftboot/SDPB convention)
+        # Note: For SOS we can't simply reshuffle, but we can fix one component
+        # We use the same approach: fix alpha[max_idx] = 1 / F_id[max_idx]
+        max_idx = np.argmax(np.abs(F_id))
+        alpha_fixed = 1.0 / F_id[max_idx]
+
+        # Fixed contribution to F_eps constraint
+        fixed_eps = alpha_fixed * F_eps[max_idx]
+
+        # Build reduced F_eps (without max_idx component)
+        F_eps_reduced = np.concatenate([F_eps[:max_idx], F_eps[max_idx+1:]])
+
+        # Build reduced coefficient matrix (without max_idx row)
+        coeff_matrix_reduced = np.vstack([coeff_matrix[:max_idx, :], coeff_matrix[max_idx+1:, :]])
+
+        # Fixed contribution to polynomial: alpha_fixed * (row max_idx of coeff_matrix)
+        fixed_poly_coeffs = alpha_fixed * coeff_matrix[max_idx, :]
+
+        # Setup CVXPY problem with reduced alpha
+        alpha = cp.Variable(self.n_constraints - 1)
 
         constraints = [
-            alpha @ F_id == 1,
-            alpha @ F_eps >= 0,
+            alpha @ F_eps_reduced >= -fixed_eps,
         ]
 
-        # Polynomial positivity via SOS
-        sos_constraints, Q0, Q1 = sos.build_constraints_cvxpy(coeff_matrix, alpha)
+        # Polynomial positivity via SOS (with fixed contribution)
+        # The constraint is: alpha_reduced @ coeff_matrix_reduced + fixed_poly_coeffs >= 0
+        # We need to modify SOS to handle the fixed contribution
+        sos_constraints, Q0, Q1 = sos.build_constraints_cvxpy_with_fixed(
+            coeff_matrix_reduced, alpha, fixed_poly_coeffs
+        )
         constraints.extend(sos_constraints)
 
         # Solve feasibility problem
@@ -801,20 +916,39 @@ class PolynomialPositivitySolver:
         # Build SOS constraint
         sos = SOSPositivityConstraint(self.poly_degree)
 
-        # Setup CVXPY problem
-        alpha = cp.Variable(self.n_constraints)
+        # Apply component-wise normalization (pycftboot/SDPB convention)
+        max_idx = np.argmax(np.abs(F_id))
+        alpha_fixed = 1.0 / F_id[max_idx]
+
+        # Fixed contributions
+        fixed_eps = alpha_fixed * F_eps[max_idx]
+        F_eps_reduced = np.concatenate([F_eps[:max_idx], F_eps[max_idx+1:]])
+
+        # Stack and reshuffle discrete F-vectors
+        F_all_discrete = np.vstack([F_eps[np.newaxis, :], F_discrete])
+        F_reduced_discrete, fixed_discrete, _ = reshuffle_with_normalization(F_all_discrete, F_id)
+        F_discrete_reduced = F_reduced_discrete[1:, :]
+        fixed_ops = fixed_discrete[1:]
+
+        # Reduced coefficient matrix (without max_idx row)
+        coeff_matrix_reduced = np.vstack([coeff_matrix[:max_idx, :], coeff_matrix[max_idx+1:, :]])
+        fixed_poly_coeffs = alpha_fixed * coeff_matrix[max_idx, :]
+
+        # Setup CVXPY problem with reduced alpha
+        alpha = cp.Variable(self.n_constraints - 1)
 
         constraints = [
-            alpha @ F_id == 1,
-            alpha @ F_eps >= 0,
+            alpha @ F_eps_reduced >= -fixed_eps,
         ]
 
-        # Add discrete sample constraints
-        for F_O in F_discrete:
-            constraints.append(alpha @ F_O >= 0)
+        # Add discrete sample constraints with fixed contribution
+        for i, F_O_reduced in enumerate(F_discrete_reduced):
+            constraints.append(alpha @ F_O_reduced >= -fixed_ops[i])
 
-        # Add polynomial positivity constraints
-        sos_constraints, Q0, Q1 = sos.build_constraints_cvxpy(coeff_matrix, alpha)
+        # Add polynomial positivity constraints with fixed contribution
+        sos_constraints, Q0, Q1 = sos.build_constraints_cvxpy_with_fixed(
+            coeff_matrix_reduced, alpha, fixed_poly_coeffs
+        )
         constraints.extend(sos_constraints)
 
         # Solve

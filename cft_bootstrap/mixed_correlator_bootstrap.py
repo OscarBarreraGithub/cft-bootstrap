@@ -32,8 +32,10 @@ except ImportError:
 
 try:
     from .taylor_conformal_blocks import TaylorCrossingVector
+    from .bootstrap_gap_solver import reshuffle_with_normalization
 except ImportError:
     from taylor_conformal_blocks import TaylorCrossingVector
+    from bootstrap_gap_solver import reshuffle_with_normalization
 
 
 @dataclass
@@ -139,25 +141,36 @@ class TwoCorrelatorBootstrapSolver:
         # Sample operators above the gap
         deltas = np.linspace(delta_epsilon_prime, delta_max, n_samples)
 
-        # Setup CVXPY problem
+        # Build F-vectors for all operators above the gap
+        F_ops_ssss = np.array([cross_ssss.build_F_vector(d) for d in deltas])
+        F_ops_eeee = np.array([cross_eeee.build_F_vector(d) for d in deltas])
+
+        # Apply component-wise normalization (pycftboot/SDPB convention)
+        # For ssss: reshuffle F_eps and F_ops using F_id_ssss
+        F_all_ssss = np.vstack([F_eps_ssss[np.newaxis, :], F_ops_ssss])
+        F_reduced_ssss, fixed_ssss, _ = reshuffle_with_normalization(F_all_ssss, F_id_ssss)
+        F_eps_ssss_reduced = F_reduced_ssss[0, :]
+        fixed_eps_ssss = fixed_ssss[0]
+        F_ops_ssss_reduced = F_reduced_ssss[1:, :]
+        fixed_ops_ssss = fixed_ssss[1:]
+
+        # Setup CVXPY problem with reduced alpha for ssss
         n = self.n_constraints
-        alpha_ssss = cp.Variable(n)
-        alpha_eeee = cp.Variable(n)
+        alpha_ssss = cp.Variable(n - 1)  # Reduced by 1 due to normalization
+        alpha_eeee = cp.Variable(n)  # eeee doesn't have the normalization constraint
 
         constraints = [
-            # Normalization on ssss (standard choice)
-            alpha_ssss @ F_id_ssss == 1,
             # First scalar (epsilon) must have positive coefficient in both
-            alpha_ssss @ F_eps_ssss >= 0,
+            # ssss uses reshuffled constraint
+            alpha_ssss @ F_eps_ssss_reduced >= -fixed_eps_ssss,
             alpha_eeee @ F_eps_eeee >= 0,
         ]
 
         # Positivity for all operators above the gap (BOTH correlators)
-        for delta in deltas:
-            F_ssss = cross_ssss.build_F_vector(delta)
-            F_eeee = cross_eeee.build_F_vector(delta)
-            constraints.append(alpha_ssss @ F_ssss >= 0)
-            constraints.append(alpha_eeee @ F_eeee >= 0)
+        # ssss uses reshuffled constraints
+        for i in range(len(deltas)):
+            constraints.append(alpha_ssss @ F_ops_ssss_reduced[i] >= -fixed_ops_ssss[i])
+            constraints.append(alpha_eeee @ F_ops_eeee[i] >= 0)
 
         # Solve feasibility problem
         prob = cp.Problem(cp.Minimize(0), constraints)
@@ -334,20 +347,26 @@ class MixedCorrelatorBootstrapSolver:
         cross = MixedCrossingVector(delta_sigma, delta_epsilon, self.max_deriv)
         n = self.n_constraints
 
-        # Three linear functionals (one per correlator)
-        alpha_ssss = cp.Variable(n)
+        # Identity F-vectors for ssss (used for normalization)
+        F_id_ssss = cross.build_F_vector_ssss(0)
+
+        # Apply component-wise normalization for ssss
+        max_idx_ssss = np.argmax(np.abs(F_id_ssss))
+        alpha_fixed_ssss = 1.0 / F_id_ssss[max_idx_ssss]
+
+        # Three linear functionals (ssss is reduced by 1)
+        alpha_ssss = cp.Variable(n - 1)  # Reduced due to normalization
         alpha_ssee = cp.Variable(n)
         alpha_eeee = cp.Variable(n)
 
-        # Identity F-vectors
-        F_id_ssss = cross.build_F_vector_ssss(0)
-        F_id_ssee = cross.build_F_vector_ssee(0)
-        F_id_eeee = cross.build_F_vector_eeee(0)
+        constraints = []
 
-        constraints = [
-            # Normalization
-            alpha_ssss @ F_id_ssss == 1,
-        ]
+        # Helper function to compute alpha_ssss @ F using reduced form
+        def ssss_inner_product(F_vec):
+            """Compute alpha_ssss @ F with normalization fix."""
+            F_reduced = np.concatenate([F_vec[:max_idx_ssss], F_vec[max_idx_ssss+1:]])
+            fixed_contrib = alpha_fixed_ssss * F_vec[max_idx_ssss]
+            return alpha_ssss @ F_reduced + fixed_contrib
 
         # First scalar (epsilon) - 2x2 matrix constraint
         F_eps_ssss = cross.build_F_vector_ssss(delta_epsilon)
@@ -355,7 +374,7 @@ class MixedCorrelatorBootstrapSolver:
         F_eps_eeee = cross.build_F_vector_eeee(delta_epsilon)
 
         M_eps = cp.bmat([
-            [cp.reshape(alpha_ssss @ F_eps_ssss, (1, 1)),
+            [cp.reshape(ssss_inner_product(F_eps_ssss), (1, 1)),
              cp.reshape(alpha_ssee @ F_eps_ssee, (1, 1))],
             [cp.reshape(alpha_ssee @ F_eps_ssee, (1, 1)),
              cp.reshape(alpha_eeee @ F_eps_eeee, (1, 1))]
@@ -371,7 +390,7 @@ class MixedCorrelatorBootstrapSolver:
             F_eeee = cross.build_F_vector_eeee(delta)
 
             M = cp.bmat([
-                [cp.reshape(alpha_ssss @ F_ssss, (1, 1)),
+                [cp.reshape(ssss_inner_product(F_ssss), (1, 1)),
                  cp.reshape(alpha_ssee @ F_ssee, (1, 1))],
                 [cp.reshape(alpha_ssee @ F_ssee, (1, 1)),
                  cp.reshape(alpha_eeee @ F_eeee, (1, 1))]
@@ -473,7 +492,10 @@ def compare_single_vs_mixed(
     Returns:
         Dictionary with bounds from each method
     """
-    from .taylor_conformal_blocks import HighOrderGapBootstrapSolver
+    try:
+        from .taylor_conformal_blocks import HighOrderGapBootstrapSolver
+    except ImportError:
+        from taylor_conformal_blocks import HighOrderGapBootstrapSolver
 
     results = {}
 
