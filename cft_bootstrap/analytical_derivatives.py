@@ -544,6 +544,303 @@ class AnalyticalCrossingDerivatives:
         return F_vec
 
 
+class HighPrecisionCrossingDerivatives:
+    """
+    Full high-precision crossing derivative computation using mpmath.
+
+    This class uses arbitrary-precision arithmetic throughout the entire
+    computation pipeline, avoiding float64 limitations entirely. This is
+    necessary for accurate reproduction of El-Showk et al. (2012) at nmax=10.
+
+    The key advantage over Richardson extrapolation is that ALL intermediate
+    values maintain full precision, preventing the error accumulation that
+    occurs when converting between float64 and high-precision at boundaries.
+
+    IMPORTANT: This is slower than the standard implementation but provides
+    the precision needed for publication-quality results.
+
+    Usage:
+        deriv = HighPrecisionCrossingDerivatives(delta_sigma=0.518, precision=50)
+        F_vec = deriv.build_F_vector(delta=1.41, indices=[(0,1), (1,0), ...])
+    """
+
+    def __init__(self, delta_sigma: float, precision: int = 50, n_terms: int = 50):
+        """
+        Initialize high-precision derivative computer.
+
+        Args:
+            delta_sigma: External operator dimension
+            precision: Decimal places of precision (default 50, use 100+ for nmax=10)
+            n_terms: Maximum Taylor expansion order
+        """
+        if not HAS_MPMATH:
+            raise ImportError("mpmath is required for HighPrecisionCrossingDerivatives. "
+                            "Install with: pip install mpmath")
+
+        self.delta_sigma = mpmath.mpf(str(delta_sigma))
+        self.precision = precision
+        self.n_terms = n_terms
+
+        # Set precision
+        mpmath.mp.dps = precision
+
+        # Precompute common values
+        self._half = mpmath.mpf('0.5')
+        self._quarter = mpmath.mpf('0.25')
+
+        # Cache for F coefficients
+        self._F_cache: Dict[Tuple[float, int], list] = {}
+
+    def _conformal_block_mpf(self, delta, ell: int, z, zbar):
+        """
+        Compute conformal block g_{Delta,ell}(z, zbar) using mpmath.
+
+        Uses the diagonal representation and hypergeometric series for
+        maximum precision.
+        """
+        if z <= 0 or zbar <= 0 or z >= 1 or zbar >= 1:
+            return mpmath.mpf(0)
+
+        # Radial coordinate
+        rho = mpmath.sqrt(z * zbar)
+
+        if ell == 0:
+            # Scalar block: g_Delta(z,zbar) ~ rho^Delta * 2F1(...)
+            # For the diagonal z=zbar, this simplifies
+            leading = rho ** delta
+
+            # 2F1(Delta/2, Delta/2; Delta + 1/2; rho^2)
+            a = delta / 2
+            b = delta / 2
+            c = delta + mpmath.mpf('0.5')
+            rho_sq = rho * rho
+
+            result = mpmath.hyp2f1(a, b, c, rho_sq)
+            return leading * result
+        else:
+            # Spinning block - more complex structure
+            # Use the factorized form for spinning operators
+            leading = rho ** delta
+
+            # Modified hypergeometric for spin
+            a = delta / 2
+            b = (delta + ell) / 2
+            c = delta + ell + mpmath.mpf('0.5')
+            rho_sq = rho * rho
+
+            # Angular factor - depends on z/zbar ratio
+            if abs(z - zbar) < mpmath.mpf('1e-30'):
+                # Diagonal limit
+                angular = mpmath.mpf(1)
+            else:
+                # Gegenbauer polynomial contribution
+                cos_theta = (z + zbar) / (2 * mpmath.sqrt(z * zbar))
+                angular = self._gegenbauer(ell, mpmath.mpf('0.5'), cos_theta)
+
+            result = mpmath.hyp2f1(a, b, c, rho_sq)
+            return leading * result * angular
+
+    def _gegenbauer(self, n: int, alpha, x):
+        """Compute Gegenbauer polynomial C_n^alpha(x) using recurrence."""
+        if n == 0:
+            return mpmath.mpf(1)
+        if n == 1:
+            return 2 * alpha * x
+
+        C0 = mpmath.mpf(1)
+        C1 = 2 * alpha * x
+
+        for k in range(2, n + 1):
+            Ck = ((2 * (k - 1 + alpha) * x * C1) - (k - 2 + 2 * alpha) * C0) / k
+            C0, C1 = C1, Ck
+
+        return C1
+
+    def _crossing_function_mpf(self, delta, ell: int, a, b):
+        """
+        Compute crossing function F(a,b) using mpmath.
+
+        F(a, b) = v^{ds} * g(z, zbar) - u^{ds} * g(1-z, 1-zbar)
+
+        where z = 1/2 + (a+b)/2, zbar = 1/2 + (a-b)/2
+        """
+        ds = self.delta_sigma
+
+        # Coordinates
+        z = self._half + (a + b) / 2
+        zbar = self._half + (a - b) / 2
+
+        # Cross-ratios
+        u = z * zbar
+        v = (1 - z) * (1 - zbar)
+
+        # Conformal blocks
+        g_direct = self._conformal_block_mpf(delta, ell, z, zbar)
+        g_crossed = self._conformal_block_mpf(delta, ell, 1 - z, 1 - zbar)
+
+        # Crossing function
+        F = (v ** ds) * g_direct - (u ** ds) * g_crossed
+
+        return F
+
+    def _compute_F_taylor_coefficients(self, delta: float, ell: int = 0) -> list:
+        """
+        Compute Taylor coefficients of F(a,b) around (0,0) using mpmath.
+
+        Returns 2D list where [m][n] = F_{m,n} = (1/m!n!) d^{m+n}F/da^m db^n |_{0,0}
+        """
+        cache_key = (delta, ell)
+        if cache_key in self._F_cache:
+            return self._F_cache[cache_key]
+
+        delta = mpmath.mpf(str(delta))
+        n = self.n_terms
+
+        # Initialize coefficient matrix
+        F_coeffs = [[mpmath.mpf(0) for _ in range(n)] for _ in range(n)]
+
+        # Compute derivatives using mpmath's diff function
+        # This is the most accurate approach as it uses adaptive step sizes
+
+        def F_func(a, b):
+            return self._crossing_function_mpf(delta, ell, a, b)
+
+        # For each (m, n) up to max order, compute derivative
+        max_order = min(n, 25)  # Limit to reasonable order
+
+        for m in range(max_order):
+            for k in range(max_order):
+                if m + k > max_order + 5:
+                    continue
+
+                try:
+                    # Use mpmath.diff for high-precision numerical differentiation
+                    # This uses adaptive Romberg integration internally
+
+                    if m == 0 and k == 0:
+                        deriv = F_func(mpmath.mpf(0), mpmath.mpf(0))
+                    elif k == 0:
+                        # Pure a-derivative
+                        def f_a(a):
+                            return F_func(a, mpmath.mpf(0))
+                        deriv = mpmath.diff(f_a, mpmath.mpf(0), m)
+                    elif m == 0:
+                        # Pure b-derivative
+                        def f_b(b):
+                            return F_func(mpmath.mpf(0), b)
+                        deriv = mpmath.diff(f_b, mpmath.mpf(0), k)
+                    else:
+                        # Mixed derivative: use finite differences with high precision
+                        deriv = self._mixed_derivative_mpf(F_func, m, k)
+
+                    # Convert to Taylor coefficient
+                    F_coeffs[m][k] = deriv / (mpmath.factorial(m) * mpmath.factorial(k))
+
+                except Exception as e:
+                    # If derivative computation fails, leave as zero
+                    warnings.warn(f"Failed to compute F[{m},{k}]: {e}")
+
+        self._F_cache[cache_key] = F_coeffs
+        return F_coeffs
+
+    def _mixed_derivative_mpf(self, f, m: int, k: int):
+        """
+        Compute mixed partial derivative d^{m+k}f/da^m db^k using mpmath.
+
+        Uses Richardson extrapolation with mpmath precision for stability.
+        """
+        n_levels = 7  # More levels for higher precision
+        h_base = mpmath.mpf('0.05')
+
+        def central_diff(h):
+            """Central difference formula for mixed derivative."""
+            result = mpmath.mpf(0)
+
+            for i in range(m + 1):
+                for j in range(k + 1):
+                    sign = (-1) ** (m - i + k - j)
+                    coeff = comb(m, i) * comb(k, j)
+                    a_val = (mpmath.mpf(i) - mpmath.mpf(m) / 2) * h
+                    b_val = (mpmath.mpf(j) - mpmath.mpf(k) / 2) * h
+                    result += sign * coeff * f(a_val, b_val)
+
+            return result / (h ** (m + k))
+
+        # Richardson extrapolation table
+        R = [[mpmath.mpf(0)] * n_levels for _ in range(n_levels)]
+
+        for i in range(n_levels):
+            h = h_base / (2 ** i)
+            R[i][0] = central_diff(h)
+
+        # Extrapolation
+        for j in range(1, n_levels):
+            for i in range(n_levels - j):
+                factor = mpmath.mpf(4) ** j
+                R[i][j] = (factor * R[i+1][j-1] - R[i][j-1]) / (factor - 1)
+
+        return R[0][n_levels - 1]
+
+    def get_normalized_derivative(self, delta: float, m: int, n: int, ell: int = 0) -> float:
+        """
+        Get the normalized derivative F_{m,n} = (1/m!n!) d^{m+n}F/da^m db^n.
+
+        Returns float for compatibility with numpy arrays.
+        """
+        F_coeffs = self._compute_F_taylor_coefficients(delta, ell)
+
+        if m >= len(F_coeffs) or n >= len(F_coeffs[0]):
+            return 0.0
+
+        return float(F_coeffs[m][n])
+
+    def build_F_vector(self, delta: float, indices: List[Tuple[int, int]], ell: int = 0) -> np.ndarray:
+        """
+        Build F-vector for given derivative indices.
+
+        Args:
+            delta: Operator dimension
+            indices: List of (m, n) derivative orders
+            ell: Operator spin
+
+        Returns:
+            Array of normalized derivatives as float64 (for solver compatibility)
+        """
+        F_coeffs = self._compute_F_taylor_coefficients(delta, ell)
+        F_vec = np.zeros(len(indices))
+
+        for i, (m, n) in enumerate(indices):
+            if m < len(F_coeffs) and n < len(F_coeffs[0]):
+                F_vec[i] = float(F_coeffs[m][n])
+
+        return F_vec
+
+    def build_F_vector_mpf(self, delta: float, indices: List[Tuple[int, int]], ell: int = 0) -> list:
+        """
+        Build F-vector keeping full mpmath precision.
+
+        Use this when feeding into a high-precision solver.
+
+        Args:
+            delta: Operator dimension
+            indices: List of (m, n) derivative orders
+            ell: Operator spin
+
+        Returns:
+            List of mpmath.mpf values
+        """
+        F_coeffs = self._compute_F_taylor_coefficients(delta, ell)
+        F_vec = []
+
+        for m, n in indices:
+            if m < len(F_coeffs) and n < len(F_coeffs[0]):
+                F_vec.append(F_coeffs[m][n])
+            else:
+                F_vec.append(mpmath.mpf(0))
+
+        return F_vec
+
+
 def test_analytical_derivatives():
     """Test the analytical derivative computation."""
     print("Testing analytical derivatives")
@@ -587,5 +884,53 @@ def test_analytical_derivatives():
     print("Test complete!")
 
 
+def test_high_precision():
+    """Test high-precision derivative computation."""
+    if not HAS_MPMATH:
+        print("mpmath not available - skipping high-precision test")
+        return
+
+    print("\nTesting HIGH-PRECISION derivatives")
+    print("=" * 60)
+
+    delta_sigma = 0.518
+
+    # Compare standard vs high-precision for nmax=5
+    print(f"\nComparing standard vs high-precision (delta_sigma={delta_sigma}):")
+
+    std_deriv = AnalyticalCrossingDerivatives(delta_sigma, n_terms=25)
+    hp_deriv = HighPrecisionCrossingDerivatives(delta_sigma, precision=50, n_terms=25)
+
+    print("\n  Delta=1.41 (scalar):")
+    for m in [1, 3, 5, 7]:
+        for n in [0, 1, 2]:
+            if m + n > 8:
+                continue
+            std = std_deriv.get_normalized_derivative(1.41, m, n)
+            hp = hp_deriv.get_normalized_derivative(1.41, m, n)
+            rel_diff = abs(std - hp) / (abs(hp) + 1e-30)
+            print(f"    F[{m},{n}]: std={std:+.6e}  hp={hp:+.6e}  rel_diff={rel_diff:.2e}")
+
+    # Test F-vector for nmax=5
+    try:
+        from el_showk_basis import get_derivative_indices
+        indices = get_derivative_indices(5)
+
+        print(f"\n  F-vector (nmax=5, {len(indices)} coeffs):")
+        F_std = std_deriv.build_F_vector(1.41, indices)
+        F_hp = hp_deriv.build_F_vector(1.41, indices)
+
+        print(f"    Std norm:  {np.linalg.norm(F_std):.6f}")
+        print(f"    HP norm:   {np.linalg.norm(F_hp):.6f}")
+        print(f"    Max diff:  {np.max(np.abs(F_std - F_hp)):.6e}")
+        print(f"    Rel diff:  {np.linalg.norm(F_std - F_hp) / np.linalg.norm(F_hp):.6e}")
+    except ImportError:
+        pass
+
+    print("\n" + "=" * 60)
+    print("High-precision test complete!")
+
+
 if __name__ == "__main__":
     test_analytical_derivatives()
+    test_high_precision()

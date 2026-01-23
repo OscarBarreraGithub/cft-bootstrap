@@ -33,9 +33,17 @@ except ImportError:
     from spinning_conformal_blocks import SpinningConformalBlock
 
 try:
-    from .analytical_derivatives import AnalyticalCrossingDerivatives, HAS_MPMATH
+    from .analytical_derivatives import (
+        AnalyticalCrossingDerivatives,
+        HighPrecisionCrossingDerivatives,
+        HAS_MPMATH
+    )
 except ImportError:
-    from analytical_derivatives import AnalyticalCrossingDerivatives, HAS_MPMATH
+    from analytical_derivatives import (
+        AnalyticalCrossingDerivatives,
+        HighPrecisionCrossingDerivatives,
+        HAS_MPMATH
+    )
 
 
 def get_derivative_indices(nmax: int) -> List[Tuple[int, int]]:
@@ -237,7 +245,8 @@ class ElShowkCrossingVector:
     contribute due to crossing symmetry.
     """
 
-    def __init__(self, delta_sigma: float, nmax: int = 10, use_analytical: bool = None):
+    def __init__(self, delta_sigma: float, nmax: int = 10, use_analytical: bool = None,
+                 high_precision: bool = False, precision: int = 100):
         """
         Initialize the crossing vector computer.
 
@@ -249,12 +258,19 @@ class ElShowkCrossingVector:
                            Analytical derivatives are more stable at high orders
                            but slower. For quick tests with low nmax, finite
                            differences are acceptable.
+            high_precision: Use full mpmath arbitrary-precision arithmetic.
+                           REQUIRED for accurate reproduction of El-Showk et al. (2012)
+                           at nmax=10. Much slower but avoids all float64 precision loss.
+                           Requires mpmath to be installed.
+            precision: Decimal places for high-precision mode (default: 100).
+                      Higher values needed for nmax=10+ (use 150+ for publication quality).
         """
         self.delta_sigma = delta_sigma
         self.nmax = nmax
         self.blocks = ConformalBlock3D()
         self.indices = get_derivative_indices(nmax)
         self.n_coeffs = len(self.indices)
+        self.high_precision = high_precision
 
         # Default: use analytical for high nmax, finite diff for low nmax
         if use_analytical is None:
@@ -262,8 +278,20 @@ class ElShowkCrossingVector:
 
         self.use_analytical = use_analytical
 
-        if use_analytical:
-            # Initialize analytical derivative computer
+        if high_precision:
+            # Use full mpmath precision for publication-quality results
+            if not HAS_MPMATH:
+                raise ImportError("high_precision=True requires mpmath. "
+                                "Install with: pip install mpmath")
+            max_order = max(m + n for m, n in self.indices)
+            self._analytical = HighPrecisionCrossingDerivatives(
+                delta_sigma,
+                precision=precision,
+                n_terms=max(50, max_order + 10)
+            )
+            print(f"[High-precision mode] Using mpmath with {precision} decimal places")
+        elif use_analytical:
+            # Initialize analytical derivative computer (Richardson extrapolation)
             max_order = max(m + n for m, n in self.indices)
             self._analytical = AnalyticalCrossingDerivatives(
                 delta_sigma,
@@ -561,7 +589,8 @@ class ElShowkBootstrapSolver:
     }
 
     def __init__(self, d: int = 3, nmax: int = 10, max_spin: int = 50,
-                 solver: str = 'auto'):
+                 solver: str = 'auto', high_precision: bool = False,
+                 precision: int = 100):
         """
         Initialize the solver.
 
@@ -570,11 +599,17 @@ class ElShowkBootstrapSolver:
             nmax: Derivative order (default 10 for 66 coefficients)
             max_spin: Maximum spin to include (default 50, paper uses 100)
             solver: Solver to use ('auto', 'scs', 'ecos', 'clarabel', 'mosek')
+            high_precision: Use full mpmath arbitrary-precision arithmetic.
+                           REQUIRED for accurate reproduction of El-Showk et al. (2012)
+                           at nmax=10. Much slower but avoids all float64 precision loss.
+            precision: Decimal places for high-precision mode (default: 100).
         """
         self.d = d
         self.nmax = nmax
         self.max_spin = max_spin
         self.solver_name = solver
+        self.high_precision = high_precision
+        self.precision = precision
         self.n_constraints = count_coefficients(nmax)
         self.indices = get_derivative_indices(nmax)
 
@@ -583,6 +618,8 @@ class ElShowkBootstrapSolver:
         print(f"  Number of constraints: {self.n_constraints}")
         print(f"  Max spin: {max_spin}")
         print(f"  Solver: {solver}")
+        if high_precision:
+            print(f"  HIGH-PRECISION MODE: {precision} decimal places (mpmath)")
 
     def unitarity_bound(self, ell: int) -> float:
         """
@@ -634,7 +671,11 @@ class ElShowkBootstrapSolver:
         except ImportError:
             from bootstrap_gap_solver import reshuffle_with_normalization
 
-        cross = ElShowkCrossingVector(delta_sigma, self.nmax)
+        cross = ElShowkCrossingVector(
+            delta_sigma, self.nmax,
+            high_precision=self.high_precision,
+            precision=self.precision
+        )
 
         # Build F-vectors
         F_id = cross.build_F_vector(0)  # Identity

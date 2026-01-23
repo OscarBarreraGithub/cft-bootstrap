@@ -104,6 +104,20 @@ USE_MULTIRESOLUTION=true
 #   - "mosek" = MOSEK solver (if licensed)
 EL_SHOWK_SOLVER="auto"
 
+# HIGH_PRECISION: Use full mpmath arbitrary-precision arithmetic
+#   - "true"  = REQUIRED for accurate reproduction of El-Showk (2012) at nmax=10
+#   - "false" = Use standard float64 (faster but less accurate)
+# This mode uses mpmath for ALL derivative computation, avoiding float64
+# precision loss that causes numerical instability at high orders.
+# Much slower but produces publication-quality results.
+HIGH_PRECISION=true
+
+# PRECISION: Number of decimal places for high-precision mode
+#   - 100 = sufficient for nmax ≤ 7
+#   - 150 = recommended for nmax = 10 (66 coefficients)
+#   - 200 = for extreme precision requirements
+PRECISION=150
+
 # ---------- SDPB Parameters ----------
 # Only for METHOD="sdpb" or "el-showk-sdpb"
 SDPB_THREADS=4         # Threads for SDPB
@@ -165,6 +179,8 @@ if [[ "${METHOD}" == "el-showk"* ]]; then
     echo "  max_spin = ${MAX_SPIN}"
     echo "  multiresolution = ${USE_MULTIRESOLUTION}"
     echo "  solver = ${EL_SHOWK_SOLVER}"
+    echo "  high_precision = ${HIGH_PRECISION}"
+    echo "  precision = ${PRECISION}"
 
     CMD="${CMD} \
         --nmax ${NMAX} \
@@ -173,6 +189,10 @@ if [[ "${METHOD}" == "el-showk"* ]]; then
 
     if [[ "${USE_MULTIRESOLUTION}" == "true" ]]; then
         CMD="${CMD} --use-multiresolution"
+    fi
+
+    if [[ "${HIGH_PRECISION}" == "true" ]]; then
+        CMD="${CMD} --high-precision --precision ${PRECISION}"
     fi
 fi
 

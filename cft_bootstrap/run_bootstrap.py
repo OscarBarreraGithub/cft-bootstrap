@@ -121,6 +121,9 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
                   use_multiresolution: bool = False,
                   el_showk_solver: str = 'auto',
                   nmax: Optional[int] = None,
+                  # High-precision parameters
+                  high_precision: bool = False,
+                  precision: int = 100,
                   output_file: Optional[str] = None):
     """
     Compute Δε' bound with gap assumption using various methods.
@@ -148,6 +151,8 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
         use_multiresolution: Use T1-T5 multi-resolution discretization for El-Showk
         el_showk_solver: Solver backend for El-Showk (auto/scs/ecos/clarabel/mosek)
         nmax: El-Showk nmax parameter (overrides max_deriv//2 if provided)
+        high_precision: Use full mpmath arbitrary-precision arithmetic (for nmax=10)
+        precision: Decimal places for high-precision mode (default: 100)
         output_file: Output file path
 
     Returns:
@@ -222,12 +227,16 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
         print(f"    max_spin = {max_spin}")
         print(f"    multiresolution = {use_multiresolution}")
         print(f"    solver = {el_showk_solver}")
+        if high_precision:
+            print(f"    HIGH-PRECISION MODE: {precision} decimal places")
 
         solver = ElShowkBootstrapSolver(
             d=3,
             nmax=actual_nmax,
             max_spin=max_spin,
-            solver=el_showk_solver
+            solver=el_showk_solver,
+            high_precision=high_precision,
+            precision=precision
         )
         bound = solver.find_delta_epsilon_prime_bound(
             delta_sigma, delta_epsilon,
@@ -418,7 +427,9 @@ def run_array_job(job_index: int, n_jobs: int, sigma_min: float, sigma_max: floa
                   gap_bound: bool = False,
                   # El-Showk specific parameters
                   max_spin: int = 50, use_multiresolution: bool = False,
-                  el_showk_solver: str = 'auto', nmax: Optional[int] = None):
+                  el_showk_solver: str = 'auto', nmax: Optional[int] = None,
+                  # High-precision parameters
+                  high_precision: bool = False, precision: int = 100):
     """
     Run a single point as part of an array job (for SLURM).
 
@@ -441,6 +452,8 @@ def run_array_job(job_index: int, n_jobs: int, sigma_min: float, sigma_max: floa
         use_multiresolution: Enable T1-T5 discretization
         el_showk_solver: Solver backend for El-Showk
         nmax: El-Showk nmax parameter (overrides max_deriv//2)
+        high_precision: Use full mpmath arbitrary-precision (REQUIRED for nmax=10)
+        precision: Decimal places for high-precision mode
 
     Returns:
         Dictionary with results
@@ -492,6 +505,8 @@ def run_array_job(job_index: int, n_jobs: int, sigma_min: float, sigma_max: floa
             use_multiresolution=use_multiresolution,
             el_showk_solver=el_showk_solver,
             nmax=nmax,
+            high_precision=high_precision,
+            precision=precision,
             output_file=None  # We'll save combined result
         )
 
@@ -908,6 +923,12 @@ Examples:
                        help='Solver backend for El-Showk method (default: auto)')
     parser.add_argument('--nmax', type=int, default=None,
                        help='El-Showk nmax parameter directly (overrides --max-deriv//2 for el-showk method)')
+    parser.add_argument('--high-precision', action='store_true',
+                       help='Use full mpmath arbitrary-precision arithmetic (REQUIRED for '
+                            'accurate reproduction of El-Showk et al. 2012 at nmax=10). '
+                            'Much slower but avoids all float64 precision loss.')
+    parser.add_argument('--precision', type=int, default=100,
+                       help='Decimal places for high-precision mode (default: 100, use 150+ for nmax=10)')
 
     # Output
     parser.add_argument('--output', '-o', type=str, help='Output file')
@@ -936,7 +957,10 @@ Examples:
             max_spin=args.max_spin,
             use_multiresolution=args.use_multiresolution,
             el_showk_solver=args.el_showk_solver,
-            nmax=args.nmax
+            nmax=args.nmax,
+            # High-precision parameters
+            high_precision=args.high_precision,
+            precision=args.precision
         )
     elif args.compare:
         # Compare methods
