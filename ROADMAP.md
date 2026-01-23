@@ -399,7 +399,7 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 |----------|------|--------|--------|
 | **1** | **Fix figure reference** (Fig. 6 not Fig. 7) | Correctness | ✅ Done |
 | **2** | **Implement two-stage pipeline** | CRITICAL - may fix gap | ✅ Done |
-| **3** | **Add spinning operators (Lmax≥50)** | HIGH | ⬜ |
+| **3** | **Add spinning operators (Lmax≥50)** | HIGH | ✅ Done |
 | **4** | **Implement (a,b) derivative basis with nmax=10** | HIGH | ✅ Done |
 | **5** | **Multi-resolution discretization (T1-T5)** | MEDIUM | ⬜ |
 | 6 | Install SDPB for smooth curves | LOW | ⬜ |
@@ -410,7 +410,7 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 - [x] Implement two-stage scan (Δε boundary first, then Δε' with Δε fixed)
 - [x] Implement (a,b) coordinate derivatives at (a=0, b=0) with mixed derivatives
 - [x] Increase to nmax=10 (66 coefficients) via ElShowkBootstrapSolver
-- [ ] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50
+- [x] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50 (via ElShowkBootstrapSolver)
 - [ ] Implement T1-T5 multi-resolution discretization
 - [ ] Match LP tolerances to serious solver
 

@@ -18,7 +18,7 @@ Reference: El-Showk et al. (2012), Section 4 and Appendix D
 
 import numpy as np
 from math import factorial
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from functools import lru_cache
 import warnings
 
@@ -26,6 +26,11 @@ try:
     from .bootstrap_solver import ConformalBlock3D
 except ImportError:
     from bootstrap_solver import ConformalBlock3D
+
+try:
+    from .spinning_conformal_blocks import SpinningConformalBlock
+except ImportError:
+    from spinning_conformal_blocks import SpinningConformalBlock
 
 
 def get_derivative_indices(nmax: int) -> List[Tuple[int, int]]:
@@ -226,6 +231,104 @@ class ElShowkCrossingVector:
         # TODO: Implement proper Taylor expansion in (a,b) coordinates
         return self.build_F_vector(delta)
 
+    def build_F_vector_spinning(self, delta: float, ell: int, n_max: int = 40) -> np.ndarray:
+        """
+        Build F-vector for spinning operator with dimension delta and spin ell.
+
+        For ℓ=0, delegates to build_F_vector().
+        For ℓ>0, uses the radial expansion from SpinningConformalBlock.
+
+        Args:
+            delta: Operator scaling dimension
+            ell: Operator spin (0, 2, 4, ...)
+            n_max: Maximum order in radial expansion
+
+        Returns:
+            F-vector of shape (n_coeffs,)
+        """
+        if ell == 0:
+            return self.build_F_vector(delta)
+
+        F_vec = np.zeros(self.n_coeffs)
+
+        # For spinning operators, compute numerically using finite differences
+        # We need F(a,b) = v^{Δσ} g_{Δ,ℓ}(z,zbar) - u^{Δσ} g_{Δ,ℓ}(1-z,1-zbar)
+        block = SpinningConformalBlock(delta, ell, n_max=n_max)
+
+        for i, (m, n) in enumerate(self.indices):
+            deriv = self._numerical_derivative_spinning(delta, ell, m, n, block)
+            F_vec[i] = deriv / (factorial(m) * factorial(n))
+
+        return F_vec
+
+    def _numerical_derivative_spinning(self, delta: float, ell: int, m: int, n: int,
+                                        block: SpinningConformalBlock,
+                                        h_a: float = 0.02, h_b: float = 0.02) -> float:
+        """
+        Compute ∂_a^m ∂_b^n F at (a=0, b=0) for a spinning operator.
+        """
+        a0, b0 = 0.0, 0.0
+
+        def F_spinning(a_val: float, b_val: float) -> float:
+            """F for spinning operator."""
+            z, zbar = self._a_b_to_z_zbar(a_val, b_val)
+
+            if z <= 0 or z >= 1 or zbar <= 0 or zbar >= 1:
+                return 0.0
+
+            u = z * zbar
+            v = (1 - z) * (1 - zbar)
+
+            # For diagonal b=0 case, use diagonal evaluation
+            if abs(b_val) < 1e-10:
+                g1 = block.evaluate_diagonal(z)
+                g2 = block.evaluate_diagonal(1 - z)
+            else:
+                # Off-diagonal: need full (r, eta) evaluation
+                r = np.sqrt(z * zbar)
+                eta = (z + zbar) / (2 * r) if r > 1e-10 else 1.0
+                eta = np.clip(eta, -1, 1)
+
+                r_1m = np.sqrt((1-z) * (1-zbar))
+                eta_1m = ((1-z) + (1-zbar)) / (2 * r_1m) if r_1m > 1e-10 else 1.0
+                eta_1m = np.clip(eta_1m, -1, 1)
+
+                # Convert to radial coordinate ρ
+                # For small z: ρ ≈ z/4, for z near 1: ρ ≈ 1
+                rho = r  # Simplified - radial coordinate
+                rho_1m = r_1m
+
+                g1 = block.evaluate(rho, eta)
+                g2 = block.evaluate(rho_1m, eta_1m)
+
+            return v**self.delta_sigma * g1 - u**self.delta_sigma * g2
+
+        # For n-th b-derivative at fixed a
+        def deriv_b_at_a(a_val):
+            if n == 0:
+                return F_spinning(a_val, b0)
+
+            coeffs_b = self._get_diff_coeffs(n)
+            half_b = len(coeffs_b) // 2
+            result = 0.0
+            for j, c in enumerate(coeffs_b):
+                b_val = b0 + (j - half_b) * h_b
+                result += c * F_spinning(a_val, b_val)
+            return result / (h_b ** n)
+
+        # Now take m-th derivative in a
+        if m == 0:
+            return deriv_b_at_a(a0)
+
+        coeffs_a = self._get_diff_coeffs(m)
+        half_a = len(coeffs_a) // 2
+        result = 0.0
+        for i, c in enumerate(coeffs_a):
+            a_val = a0 + (i - half_a) * h_a
+            result += c * deriv_b_at_a(a_val)
+
+        return result / (h_a ** m)
+
 
 class ElShowkBootstrapSolver:
     """
@@ -234,29 +337,46 @@ class ElShowkBootstrapSolver:
     This solver implements the paper's protocol with:
     - nmax=10 (66 derivative coefficients)
     - Mixed (a,b) derivatives at (a=1, b=0)
-    - Compatible with spinning operators
+    - Spinning operators up to Lmax (default 50)
     """
 
-    def __init__(self, d: int = 3, nmax: int = 10):
+    def __init__(self, d: int = 3, nmax: int = 10, max_spin: int = 50):
         """
         Initialize the solver.
 
         Args:
             d: Spacetime dimension (default 3 for Ising)
             nmax: Derivative order (default 10 for 66 coefficients)
+            max_spin: Maximum spin to include (default 50, paper uses 100)
         """
         self.d = d
         self.nmax = nmax
+        self.max_spin = max_spin
         self.n_constraints = count_coefficients(nmax)
         self.indices = get_derivative_indices(nmax)
 
         print(f"El-Showk solver initialized:")
         print(f"  nmax = {nmax}")
         print(f"  Number of constraints: {self.n_constraints}")
+        print(f"  Max spin: {max_spin}")
+
+    def unitarity_bound(self, ell: int) -> float:
+        """
+        Unitarity bound for spin ℓ operators in d dimensions.
+
+        Δ ≥ ℓ + d - 2  for ℓ > 0
+        Δ ≥ (d - 2)/2  for ℓ = 0
+
+        In 3D: Δ ≥ ℓ + 1 for ℓ > 0, Δ ≥ 0.5 for ℓ = 0
+        """
+        if ell == 0:
+            return (self.d - 2) / 2  # 0.5 for d=3
+        return ell + self.d - 2  # ℓ + 1 for d=3
 
     def is_excluded(self, delta_sigma: float, delta_epsilon: float,
                     delta_epsilon_prime: float,
-                    delta_max: float = 30.0, n_samples: int = 100) -> bool:
+                    delta_max: float = 30.0, n_scalar_samples: int = 60,
+                    n_spin_samples: int = 30, include_spinning: bool = True) -> bool:
         """
         Check if point (Δσ, Δε, Δε') is excluded.
 
@@ -264,9 +384,18 @@ class ElShowkBootstrapSolver:
             Find α such that:
                 α · F_id = 1 (normalization)
                 α · F_ε ≥ 0 (first scalar OK)
-                α · F_Δ ≥ 0 for all Δ ≥ Δε' (positivity)
+                α · F_{Δ,ℓ} ≥ 0 for all operators above gap (positivity)
 
         If such α exists, the point is EXCLUDED.
+
+        Args:
+            delta_sigma: External scalar dimension
+            delta_epsilon: First scalar dimension Δε
+            delta_epsilon_prime: Gap for second scalar Δε'
+            delta_max: Maximum dimension to sample
+            n_scalar_samples: Number of scalar operators to sample above gap
+            n_spin_samples: Number of spinning operators per spin
+            include_spinning: Whether to include spinning operators (default True)
         """
         try:
             import cvxpy as cp
@@ -285,9 +414,26 @@ class ElShowkBootstrapSolver:
         F_id = cross.build_F_vector(0)  # Identity
         F_eps = cross.build_F_vector(delta_epsilon)  # First scalar
 
-        # Sample operators above the gap
-        deltas = np.linspace(delta_epsilon_prime, delta_max, n_samples)
-        F_ops = np.array([cross.build_F_vector(d) for d in deltas])
+        # Collect all F-vectors for operators
+        all_F_ops = []
+
+        # 1. Scalar operators (ℓ=0) above the gap Δε'
+        scalar_deltas = np.linspace(delta_epsilon_prime, delta_max, n_scalar_samples)
+        for delta in scalar_deltas:
+            F = cross.build_F_vector(delta)
+            all_F_ops.append(F)
+
+        # 2. Spinning operators (ℓ = 2, 4, 6, ..., max_spin)
+        if include_spinning and self.max_spin >= 2:
+            for ell in range(2, self.max_spin + 1, 2):
+                delta_min = self.unitarity_bound(ell)
+                # More samples near unitarity bound, fewer at high Δ
+                spin_deltas = np.linspace(delta_min, delta_max, n_spin_samples)
+                for delta in spin_deltas:
+                    F = cross.build_F_vector_spinning(delta, ell)
+                    all_F_ops.append(F)
+
+        F_ops = np.array(all_F_ops)
 
         # Stack for reshuffling
         F_all = np.vstack([F_eps[np.newaxis, :], F_ops])
@@ -323,51 +469,77 @@ class ElShowkBootstrapSolver:
         delta_epsilon: float,
         delta_prime_min: float = None,
         delta_prime_max: float = 6.0,
-        tolerance: float = 0.02
+        tolerance: float = 0.02,
+        include_spinning: bool = True,
+        verbose: bool = False
     ) -> float:
-        """Find upper bound on Δε' using binary search."""
+        """
+        Find upper bound on Δε' using binary search.
+
+        Args:
+            delta_sigma: External scalar dimension
+            delta_epsilon: First scalar dimension
+            delta_prime_min: Minimum gap to search (default: delta_epsilon + 0.1)
+            delta_prime_max: Maximum gap to search
+            tolerance: Search tolerance
+            include_spinning: Whether to include spinning operators
+            verbose: Print progress
+        """
         if delta_prime_min is None:
             delta_prime_min = delta_epsilon + 0.1
 
         delta_prime_min = max(delta_prime_min, delta_epsilon + 0.05)
 
-        if self.is_excluded(delta_sigma, delta_epsilon, delta_prime_min):
+        if verbose:
+            print(f"Searching for Δε' bound at Δσ={delta_sigma:.4f}, Δε={delta_epsilon:.4f}")
+            print(f"  Range: [{delta_prime_min:.2f}, {delta_prime_max:.2f}]")
+            print(f"  Including spinning operators: {include_spinning}")
+
+        if self.is_excluded(delta_sigma, delta_epsilon, delta_prime_min, include_spinning=include_spinning):
             return delta_prime_min
 
-        if not self.is_excluded(delta_sigma, delta_epsilon, delta_prime_max):
+        if not self.is_excluded(delta_sigma, delta_epsilon, delta_prime_max, include_spinning=include_spinning):
             return float('inf')
 
         lo, hi = delta_prime_min, delta_prime_max
+        iterations = 0
         while hi - lo > tolerance:
             mid = (lo + hi) / 2
-            if self.is_excluded(delta_sigma, delta_epsilon, mid):
+            if self.is_excluded(delta_sigma, delta_epsilon, mid, include_spinning=include_spinning):
                 hi = mid
             else:
                 lo = mid
+            iterations += 1
+            if verbose and iterations % 5 == 0:
+                print(f"  Iteration {iterations}: [{lo:.3f}, {hi:.3f}]")
 
-        return (lo + hi) / 2
+        bound = (lo + hi) / 2
+        if verbose:
+            print(f"  Final bound: Δε' ≤ {bound:.4f}")
+        return bound
 
 
 # Convenience functions
 def test_el_showk_basis():
     """Test the El-Showk derivative basis."""
     print("Testing El-Showk derivative basis")
-    print("=" * 50)
+    print("=" * 60)
 
     # Test coefficient counting
+    print("\n1. Coefficient counting:")
     for nmax in [5, 10, 11]:
         n_coeffs = count_coefficients(nmax)
         expected = (nmax + 1) * (nmax + 2) // 2
-        print(f"nmax={nmax}: {n_coeffs} coefficients (expected: {expected})")
+        print(f"  nmax={nmax}: {n_coeffs} coefficients (expected: {expected})")
 
     # Test derivative indices
-    print("\nDerivative indices for nmax=3:")
+    print("\n2. Derivative indices for nmax=3:")
     indices = get_derivative_indices(3)
     for m, n in indices:
         print(f"  (m={m}, n={n}), order = {m + 2*n}")
 
     # Test F-vector computation
-    print("\nTesting F-vector computation at Ising point:")
+    print("\n3. F-vector computation at Ising point (scalars):")
     cross = ElShowkCrossingVector(delta_sigma=0.518, nmax=3)
 
     F_id = cross.build_F_vector(0)
@@ -376,16 +548,65 @@ def test_el_showk_basis():
     print(f"  F_identity: {F_id[:5]}...")
     print(f"  F_epsilon:  {F_eps[:5]}...")
 
-    # Test solver
-    print("\nTesting solver at Ising point:")
-    solver = ElShowkBootstrapSolver(d=3, nmax=3)
+    # Test spinning F-vectors
+    print("\n4. F-vector computation for spinning operators:")
+    F_spin2 = cross.build_F_vector_spinning(3.0, ell=2)  # Stress tensor
+    F_spin4 = cross.build_F_vector_spinning(5.0, ell=4)
+    print(f"  F(Δ=3, ℓ=2): {F_spin2[:5]}...")
+    print(f"  F(Δ=5, ℓ=4): {F_spin4[:5]}...")
 
-    excluded = solver.is_excluded(0.518, 1.41, 3.0)
-    print(f"  Δε'=3.0 excluded: {excluded}")
+    # Test solver with scalars only
+    print("\n5. Solver test (scalars only, nmax=3, max_spin=0):")
+    solver_scalar = ElShowkBootstrapSolver(d=3, nmax=3, max_spin=0)
+    excluded_scalar = solver_scalar.is_excluded(0.518, 1.41, 3.0, include_spinning=False)
+    print(f"  Δε'=3.0 excluded (scalars): {excluded_scalar}")
 
-    print("\n" + "=" * 50)
+    # Test solver with spinning operators
+    print("\n6. Solver test (with spinning, nmax=3, max_spin=6):")
+    solver_spin = ElShowkBootstrapSolver(d=3, nmax=3, max_spin=6)
+    excluded_spin = solver_spin.is_excluded(0.518, 1.41, 3.0,
+                                            n_scalar_samples=30, n_spin_samples=10,
+                                            include_spinning=True)
+    print(f"  Δε'=3.0 excluded (with spin): {excluded_spin}")
+
+    print("\n" + "=" * 60)
     print("Test complete!")
 
 
+def test_spinning_operators():
+    """Test spinning operators in more detail."""
+    print("\nTesting spinning operators in El-Showk basis")
+    print("=" * 60)
+
+    delta_sigma = 0.518
+    delta_epsilon = 1.41
+
+    print(f"\nIsing point: Δσ = {delta_sigma}, Δε = {delta_epsilon}")
+    print("Reference: Δε' ≤ 3.8 (El-Showk 2012)")
+
+    # Test with different max_spin values
+    for max_spin in [0, 2, 6, 10]:
+        print(f"\n--- max_spin = {max_spin} ---")
+        solver = ElShowkBootstrapSolver(d=3, nmax=5, max_spin=max_spin)
+
+        # Test a few gap values
+        for gap in [2.5, 3.0, 3.5]:
+            if max_spin > 0:
+                excluded = solver.is_excluded(delta_sigma, delta_epsilon, gap,
+                                            n_scalar_samples=40, n_spin_samples=15,
+                                            include_spinning=True)
+            else:
+                excluded = solver.is_excluded(delta_sigma, delta_epsilon, gap,
+                                            include_spinning=False)
+            status = "EXCLUDED" if excluded else "ALLOWED"
+            print(f"  Δε' = {gap}: {status}")
+
+    print("\n" + "=" * 60)
+
+
 if __name__ == "__main__":
-    test_el_showk_basis()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--spinning":
+        test_spinning_operators()
+    else:
+        test_el_showk_basis()

@@ -364,7 +364,7 @@ To reproduce the reference Δε' curve (paper Figure 6), we need:
 - [x] **Fix figure reference**: Target Fig. 6, not Fig. 7
 - [x] **Two-stage scan**: Compute Δε,max(Δσ) first, then Δε' with Δε fixed to boundary
 - [x] **Derivative basis**: Implement full nmax=10 (66 coefficients) in (a,b) coordinates
-- [ ] **Spinning operators**: Include spins l = 0, 2, 4, ... up to Lmax ≥ 50
+- [x] **Spinning operators**: Include spins l = 0, 2, 4, ... up to Lmax ≥ 50 (via ElShowkBootstrapSolver)
 - [ ] **Multi-resolution discretization**: Implement T1-T5 style tables
 - [ ] **LP numerics**: Match tolerances to serious LP solver
 
