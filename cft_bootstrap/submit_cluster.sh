@@ -48,6 +48,17 @@ SIGMA_MAX=0.550
 # Number of points (should match --array above: 0 to N_POINTS-1)
 N_POINTS=20
 
+# ---------- Computation Mode ----------
+# GAP_BOUND: Enable two-stage Figure 6 computation
+#   - "true"  = Compute Δε' bounds along the Δε boundary (FIGURE 6)
+#   - "false" = Compute simple Δε bounds only
+#
+# When GAP_BOUND=true, each job performs:
+#   Stage 1: Find Δε boundary at this Δσ
+#   Stage 2: Compute Δε' bound with Δε fixed to boundary
+#
+GAP_BOUND=true
+
 # ---------- Method Selection ----------
 # Available methods:
 #   "lp"              - Linear programming (fast, basic)
@@ -124,6 +135,7 @@ echo "=============================================="
 echo "CFT Bootstrap Job ${SLURM_ARRAY_TASK_ID} of ${N_POINTS}"
 echo "=============================================="
 echo "Method: ${METHOD}"
+echo "Gap bound mode: ${GAP_BOUND}"
 echo "Delta_sigma range: [${SIGMA_MIN}, ${SIGMA_MAX}]"
 echo "Output: ${OUTPUT_DIR}"
 
@@ -139,6 +151,12 @@ CMD="python run_bootstrap.py \
     --tolerance ${TOLERANCE} \
     --poly-degree ${POLY_DEGREE} \
     --output-dir ${OUTPUT_DIR}"
+
+# Add gap bound flag if enabled (Figure 6 mode)
+if [[ "${GAP_BOUND}" == "true" ]]; then
+    echo "  Computing Δε' bounds (Figure 6 mode)"
+    CMD="${CMD} --gap-bound"
+fi
 
 # Add El-Showk specific flags if applicable
 if [[ "${METHOD}" == "el-showk"* ]]; then

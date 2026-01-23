@@ -414,49 +414,204 @@ def run_parallel(delta_sigmas: np.ndarray, method: str, max_deriv: int,
 
 def run_array_job(job_index: int, n_jobs: int, sigma_min: float, sigma_max: float,
                   method: str = 'lp', max_deriv: int = 5, tolerance: float = 0.01,
-                  output_dir: str = 'results'):
+                  poly_degree: int = 15, output_dir: str = 'results',
+                  gap_bound: bool = False,
+                  # El-Showk specific parameters
+                  max_spin: int = 50, use_multiresolution: bool = False,
+                  el_showk_solver: str = 'auto', nmax: Optional[int] = None):
     """
     Run a single point as part of an array job (for SLURM).
 
-    Each job computes one delta_sigma value.
+    Each job computes one delta_sigma value. In gap_bound mode, this performs
+    the two-stage El-Showk (2012) Figure 6 computation:
+      1. Find the Δε boundary at this Δσ
+      2. Compute Δε' bound with Δε fixed to the boundary value
+
+    Args:
+        job_index: SLURM array task ID (0-indexed)
+        n_jobs: Total number of jobs in the array
+        sigma_min, sigma_max: Range of Δσ values
+        method: Solver method
+        max_deriv: Maximum derivative order
+        tolerance: Binary search tolerance
+        poly_degree: Polynomial degree (for polynomial/hybrid methods)
+        output_dir: Output directory for results
+        gap_bound: If True, compute Δε' gap bounds (Figure 6 mode)
+        max_spin: Maximum spin for El-Showk (default: 50)
+        use_multiresolution: Enable T1-T5 discretization
+        el_showk_solver: Solver backend for El-Showk
+        nmax: El-Showk nmax parameter (overrides max_deriv//2)
+
+    Returns:
+        Dictionary with results
     """
     delta_sigmas = np.linspace(sigma_min, sigma_max, n_jobs)
     delta_sigma = delta_sigmas[job_index]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    output_file = f"{output_dir}/bound_{job_index:04d}.json"
 
-    return run_single_point(delta_sigma, method, max_deriv, tolerance, output_file)
+    if gap_bound:
+        # Two-stage Figure 6 computation:
+        # Stage 1: Find Δε boundary at this Δσ
+        # Stage 2: Compute Δε' bound with gap assumption
+        output_file = f"{output_dir}/gap_bound_{job_index:04d}.json"
+
+        print("=" * 60)
+        print(f"Array Job {job_index}/{n_jobs}: Δσ = {delta_sigma:.6f}")
+        print(f"Computing Figure 6 style Δε' bound (two-stage)")
+        print("=" * 60)
+
+        # Stage 1: Find Δε boundary using basic bootstrap solver
+        # (This is the single-correlator bound, same method for all)
+        print("\n--- Stage 1: Finding Δε boundary ---")
+        t0 = time.time()
+
+        # Use BootstrapSolver for Stage 1 (finding the Δε boundary)
+        # This is the upper bound on Δε from single-correlator crossing
+        basic_solver = BootstrapSolver(d=3, max_deriv=max_deriv)
+        delta_epsilon = basic_solver.find_bound(
+            delta_sigma, method='lp', tolerance=tolerance
+        )
+        print(f"  Found Δε boundary: {delta_epsilon:.6f}")
+
+        t1 = time.time()
+        print(f"Stage 1 complete: Δε = {delta_epsilon:.6f} ({t1-t0:.1f}s)")
+
+        # Stage 2: Compute Δε' bound with gap assumption
+        print(f"\n--- Stage 2: Computing Δε' bound (Δε = {delta_epsilon:.6f}) ---")
+        t2 = time.time()
+
+        result = run_gap_bound(
+            delta_sigma=delta_sigma,
+            delta_epsilon=delta_epsilon,
+            method=method,
+            max_deriv=max_deriv,
+            poly_degree=poly_degree,
+            tolerance=tolerance,
+            max_spin=max_spin,
+            use_multiresolution=use_multiresolution,
+            el_showk_solver=el_showk_solver,
+            nmax=nmax,
+            output_file=None  # We'll save combined result
+        )
+
+        t3 = time.time()
+
+        # Combine results
+        combined_result = {
+            'job_index': job_index,
+            'delta_sigma': delta_sigma,
+            'delta_epsilon_boundary': delta_epsilon,
+            'delta_epsilon_prime_bound': result['delta_epsilon_prime_bound'],
+            'method': method,
+            'max_deriv': max_deriv,
+            'nmax': nmax if nmax is not None else max_deriv // 2,
+            'max_spin': max_spin,
+            'use_multiresolution': use_multiresolution,
+            'tolerance': tolerance,
+            'stage1_time_seconds': t1 - t0,
+            'stage2_time_seconds': t3 - t2,
+            'total_time_seconds': t3 - t0
+        }
+
+        print(f"\n{'=' * 60}")
+        print(f"Result: Δσ = {delta_sigma:.6f}")
+        print(f"        Δε = {delta_epsilon:.6f} (boundary)")
+        print(f"        Δε' ≤ {combined_result['delta_epsilon_prime_bound']:.6f}")
+        print(f"Total time: {t3-t0:.1f}s")
+        print("=" * 60)
+
+        with open(output_file, 'w') as f:
+            json.dump(combined_result, f, indent=2)
+        print(f"Saved to {output_file}")
+
+        return combined_result
+    else:
+        # Simple single-point Δε bound
+        output_file = f"{output_dir}/bound_{job_index:04d}.json"
+        return run_single_point(delta_sigma, method, max_deriv, tolerance, output_file)
 
 
 def collect_array_results(output_dir: str = 'results', output_file: str = 'combined_results.json'):
-    """Collect results from array job into a single file."""
+    """
+    Collect results from array job into a single file.
+
+    Automatically detects whether results are from:
+    - Simple Δε bound computation (bound_*.json files)
+    - Gap bound / Figure 6 computation (gap_bound_*.json files)
+    """
     import glob
 
-    files = sorted(glob.glob(f"{output_dir}/bound_*.json"))
-    results = []
+    # Check for gap bound results first
+    gap_files = sorted(glob.glob(f"{output_dir}/gap_bound_*.json"))
+    bound_files = sorted(glob.glob(f"{output_dir}/bound_*.json"))
 
-    for f in files:
-        with open(f) as fp:
-            results.append(json.load(fp))
+    if gap_files:
+        # Gap bound mode (Figure 6 style)
+        print(f"Found {len(gap_files)} gap bound results")
+        results = []
+        for f in gap_files:
+            with open(f) as fp:
+                results.append(json.load(fp))
 
-    delta_sigmas = [r['delta_sigma'] for r in results]
-    bounds = [r['delta_epsilon_bound'] for r in results]
+        delta_sigmas = [r['delta_sigma'] for r in results]
+        delta_epsilons = [r['delta_epsilon_boundary'] for r in results]
+        delta_epsilon_primes = [r['delta_epsilon_prime_bound'] for r in results]
 
-    combined = {
-        'delta_sigma_values': delta_sigmas,
-        'delta_epsilon_bounds': bounds,
-        'n_points': len(results),
-        'source_files': files
-    }
+        combined = {
+            'type': 'gap_bound',
+            'delta_sigma': delta_sigmas,
+            'delta_epsilon_boundary': delta_epsilons,
+            'delta_epsilon_prime_bound': delta_epsilon_primes,
+            'method': results[0].get('method', 'unknown') if results else 'unknown',
+            'nmax': results[0].get('nmax') if results else None,
+            'max_spin': results[0].get('max_spin') if results else None,
+            'n_points': len(results),
+            'source_files': [str(f) for f in gap_files]
+        }
 
-    with open(output_file, 'w') as f:
-        json.dump(combined, f, indent=2)
+        with open(output_file, 'w') as f:
+            json.dump(combined, f, indent=2)
 
-    np.save(output_file.replace('.json', '.npy'),
-            np.array(list(zip(delta_sigmas, bounds))))
+        # Save as numpy array: [Δσ, Δε, Δε']
+        np_data = np.array(list(zip(delta_sigmas, delta_epsilons, delta_epsilon_primes)))
+        np.save(output_file.replace('.json', '.npy'), np_data)
 
-    print(f"Combined {len(files)} results into {output_file}")
+        print(f"Combined {len(gap_files)} gap bound results into {output_file}")
+        print(f"  Δσ range: [{min(delta_sigmas):.4f}, {max(delta_sigmas):.4f}]")
+        print(f"  Δε range: [{min(delta_epsilons):.4f}, {max(delta_epsilons):.4f}]")
+        print(f"  Δε' range: [{min(delta_epsilon_primes):.4f}, {max(delta_epsilon_primes):.4f}]")
+
+    elif bound_files:
+        # Simple Δε bound mode
+        print(f"Found {len(bound_files)} bound results")
+        results = []
+        for f in bound_files:
+            with open(f) as fp:
+                results.append(json.load(fp))
+
+        delta_sigmas = [r['delta_sigma'] for r in results]
+        bounds = [r['delta_epsilon_bound'] for r in results]
+
+        combined = {
+            'type': 'single_bound',
+            'delta_sigma_values': delta_sigmas,
+            'delta_epsilon_bounds': bounds,
+            'n_points': len(results),
+            'source_files': [str(f) for f in bound_files]
+        }
+
+        with open(output_file, 'w') as f:
+            json.dump(combined, f, indent=2)
+
+        np.save(output_file.replace('.json', '.npy'),
+                np.array(list(zip(delta_sigmas, bounds))))
+
+        print(f"Combined {len(bound_files)} results into {output_file}")
+
+    else:
+        print(f"No result files found in {output_dir}")
+        print("  Expected: bound_*.json or gap_bound_*.json")
 
 
 def run_two_stage_scan(max_deriv: int = 11, tolerance: float = 0.02,
@@ -766,8 +921,23 @@ Examples:
         if args.job_index is None or args.n_jobs is None:
             print("Error: --job-index and --n-jobs required for array job")
             sys.exit(1)
-        run_array_job(args.job_index, args.n_jobs, args.sigma_min, args.sigma_max,
-                     args.method, args.max_deriv, args.tolerance, args.output_dir)
+        run_array_job(
+            job_index=args.job_index,
+            n_jobs=args.n_jobs,
+            sigma_min=args.sigma_min,
+            sigma_max=args.sigma_max,
+            method=args.method,
+            max_deriv=args.max_deriv,
+            tolerance=args.tolerance,
+            poly_degree=args.poly_degree,
+            output_dir=args.output_dir,
+            gap_bound=args.gap_bound,
+            # El-Showk parameters
+            max_spin=args.max_spin,
+            use_multiresolution=args.use_multiresolution,
+            el_showk_solver=args.el_showk_solver,
+            nmax=args.nmax
+        )
     elif args.compare:
         # Compare methods
         output = args.output or f'compare_methods_{args.delta_sigma}.json'
