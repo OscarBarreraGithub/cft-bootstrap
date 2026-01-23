@@ -114,7 +114,13 @@ def run_single_point(delta_sigma: float, method: str = 'lp',
 def run_gap_bound(delta_sigma: float, delta_epsilon: float,
                   method: str = 'sdpb', max_deriv: int = 21,
                   poly_degree: int = 20, tolerance: float = 0.01,
-                  sdpb_threads: int = 4, output_file: Optional[str] = None):
+                  sdpb_threads: int = 4,
+                  # El-Showk specific parameters
+                  max_spin: int = 50,
+                  use_multiresolution: bool = False,
+                  el_showk_solver: str = 'auto',
+                  nmax: Optional[int] = None,
+                  output_file: Optional[str] = None):
     """
     Compute Δε' bound with gap assumption using various methods.
 
@@ -129,6 +135,7 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
             - 'hybrid': Polynomial + discrete samples for robustness
             - 'two-correlator': Two-correlator bootstrap (ssss + eeee)
             - 'mixed-correlator': Full mixed correlator with matrix SDP
+            - 'el-showk': El-Showk (2012) full derivative basis with spinning operators
             - 'sdpb': SDPB solver (requires installation)
             - 'cvxpy': Discrete sampling with CVXPY
             - 'discrete': Alias for 'cvxpy'
@@ -136,6 +143,10 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
         poly_degree: Polynomial approximation degree
         tolerance: Binary search tolerance
         sdpb_threads: Number of threads for SDPB
+        max_spin: Maximum spin for El-Showk spinning operators (default: 50)
+        use_multiresolution: Use T1-T5 multi-resolution discretization for El-Showk
+        el_showk_solver: Solver backend for El-Showk (auto/scs/ecos/clarabel/mosek)
+        nmax: El-Showk nmax parameter (overrides max_deriv//2 if provided)
         output_file: Output file path
 
     Returns:
@@ -200,15 +211,29 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
             verbose=True
         )
     elif method == 'el-showk':
-        # El-Showk et al. (2012) full derivative basis
-        # Convert max_deriv to nmax: nmax=10 gives 66 coefficients
-        nmax = max_deriv // 2  # Approximate conversion
-        n_coeffs = count_coefficients(nmax)
-        print(f"  Using El-Showk derivative basis (nmax={nmax}, {n_coeffs} coefficients)")
-        solver = ElShowkBootstrapSolver(d=3, nmax=nmax)
+        # El-Showk et al. (2012) full derivative basis with spinning operators
+        # Use explicit nmax if provided, otherwise derive from max_deriv
+        actual_nmax = nmax if nmax is not None else max_deriv // 2
+        n_coeffs = count_coefficients(actual_nmax)
+
+        print(f"  Using El-Showk derivative basis:")
+        print(f"    nmax = {actual_nmax} ({n_coeffs} coefficients)")
+        print(f"    max_spin = {max_spin}")
+        print(f"    multiresolution = {use_multiresolution}")
+        print(f"    solver = {el_showk_solver}")
+
+        solver = ElShowkBootstrapSolver(
+            d=3,
+            nmax=actual_nmax,
+            max_spin=max_spin,
+            solver=el_showk_solver
+        )
         bound = solver.find_delta_epsilon_prime_bound(
             delta_sigma, delta_epsilon,
-            tolerance=tolerance
+            tolerance=tolerance,
+            include_spinning=(max_spin > 0),
+            use_multiresolution=use_multiresolution,
+            verbose=True
         )
     elif method == 'sdpb':
         # Try SDPB, fall back to CVXPY if not available
@@ -740,6 +765,11 @@ Examples:
             poly_degree=args.poly_degree,
             tolerance=args.tolerance,
             sdpb_threads=args.sdpb_threads,
+            # El-Showk specific parameters
+            max_spin=args.max_spin,
+            use_multiresolution=args.use_multiresolution,
+            el_showk_solver=args.el_showk_solver,
+            nmax=args.nmax,
             output_file=output
         )
     elif args.grid:
