@@ -366,7 +366,7 @@ To reproduce the reference Δε' curve (paper Figure 6), we need:
 - [x] **Derivative basis**: Implement full nmax=10 (66 coefficients) in (a,b) coordinates
 - [x] **Spinning operators**: Include spins l = 0, 2, 4, ... up to Lmax ≥ 50 (via ElShowkBootstrapSolver)
 - [x] **Multi-resolution discretization**: Implement T1-T5 style tables (via get_multiresolution_operators)
-- [ ] **LP numerics**: Match tolerances to serious LP solver
+- [x] **LP numerics**: Match tolerances to serious LP solver (1e-9 abs/rel, multi-solver fallback)
 
 ---
 

@@ -494,7 +494,36 @@ class ElShowkBootstrapSolver:
     - Spinning operators up to Lmax (default 50)
     """
 
-    def __init__(self, d: int = 3, nmax: int = 10, max_spin: int = 50):
+    # Solver options with tolerances matching serious LP solvers
+    # Paper used IBM ILOG CPLEX (dual simplex)
+    SOLVER_OPTIONS = {
+        'scs': {
+            'eps_abs': 1e-9,      # Absolute tolerance (default 1e-4)
+            'eps_rel': 1e-9,      # Relative tolerance (default 1e-4)
+            'max_iters': 50000,   # More iterations for convergence
+            'verbose': False,
+        },
+        'ecos': {
+            'abstol': 1e-9,
+            'reltol': 1e-9,
+            'feastol': 1e-9,
+            'max_iters': 500,
+            'verbose': False,
+        },
+        'clarabel': {
+            'tol_gap_abs': 1e-9,
+            'tol_gap_rel': 1e-9,
+            'tol_feas': 1e-9,
+            'max_iter': 500,
+            'verbose': False,
+        },
+        'mosek': {
+            'verbose': False,
+        },
+    }
+
+    def __init__(self, d: int = 3, nmax: int = 10, max_spin: int = 50,
+                 solver: str = 'auto'):
         """
         Initialize the solver.
 
@@ -502,10 +531,12 @@ class ElShowkBootstrapSolver:
             d: Spacetime dimension (default 3 for Ising)
             nmax: Derivative order (default 10 for 66 coefficients)
             max_spin: Maximum spin to include (default 50, paper uses 100)
+            solver: Solver to use ('auto', 'scs', 'ecos', 'clarabel', 'mosek')
         """
         self.d = d
         self.nmax = nmax
         self.max_spin = max_spin
+        self.solver_name = solver
         self.n_constraints = count_coefficients(nmax)
         self.indices = get_derivative_indices(nmax)
 
@@ -513,6 +544,7 @@ class ElShowkBootstrapSolver:
         print(f"  nmax = {nmax}")
         print(f"  Number of constraints: {self.n_constraints}")
         print(f"  Max spin: {max_spin}")
+        print(f"  Solver: {solver}")
 
     def unitarity_bound(self, ell: int) -> float:
         """
@@ -624,7 +656,7 @@ class ElShowkBootstrapSolver:
         F_ops_reduced = F_reduced[1:, :]
         fixed_ops = fixed_contribs[1:]
 
-        # Solve SDP
+        # Solve SDP with high-precision tolerances
         alpha = cp.Variable(self.n_constraints - 1)
 
         constraints = [alpha @ F_eps_reduced >= -fixed_eps]
@@ -633,12 +665,71 @@ class ElShowkBootstrapSolver:
 
         prob = cp.Problem(cp.Minimize(0), constraints)
 
+        # Try solvers in order of preference
+        solvers_to_try = self._get_solvers_to_try()
+
+        for solver_name, solver_cp, options in solvers_to_try:
+            try:
+                prob.solve(solver=solver_cp, **options)
+                if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                    return True  # EXCLUDED
+                elif prob.status == cp.INFEASIBLE:
+                    return False  # ALLOWED
+                # Otherwise try next solver
+            except Exception:
+                continue
+
+        # All solvers failed or returned unclear status
+        return False
+
+    def _get_solvers_to_try(self):
+        """Get list of (name, cvxpy_solver, options) to try."""
+        import cvxpy as cp
+
+        if self.solver_name != 'auto':
+            # Use specified solver only
+            solver_map = {
+                'scs': cp.SCS,
+                'ecos': cp.ECOS,
+                'clarabel': cp.CLARABEL,
+                'mosek': cp.MOSEK,
+            }
+            if self.solver_name in solver_map:
+                solver_cp = solver_map[self.solver_name]
+                options = self.SOLVER_OPTIONS.get(self.solver_name, {})
+                return [(self.solver_name, solver_cp, options)]
+            else:
+                warnings.warn(f"Unknown solver {self.solver_name}, using SCS")
+                return [('scs', cp.SCS, self.SOLVER_OPTIONS['scs'])]
+
+        # Auto mode: try solvers in order of preference
+        solvers = []
+
+        # Try CLARABEL first (modern, high-precision)
         try:
-            prob.solve(solver=cp.SCS, verbose=False, max_iters=10000)
-            return prob.status == cp.OPTIMAL
-        except Exception as e:
-            warnings.warn(f"Solver failed: {e}")
-            return False
+            import clarabel
+            solvers.append(('clarabel', cp.CLARABEL, self.SOLVER_OPTIONS['clarabel']))
+        except ImportError:
+            pass
+
+        # Try ECOS (good for LP/SOCP)
+        try:
+            import ecos
+            solvers.append(('ecos', cp.ECOS, self.SOLVER_OPTIONS['ecos']))
+        except ImportError:
+            pass
+
+        # Try MOSEK (commercial, very accurate)
+        try:
+            import mosek
+            solvers.append(('mosek', cp.MOSEK, self.SOLVER_OPTIONS['mosek']))
+        except ImportError:
+            pass
+
+        # SCS always available as fallback
+        solvers.append(('scs', cp.SCS, self.SOLVER_OPTIONS['scs']))
+
+        return solvers
 
     def find_delta_epsilon_prime_bound(
         self,

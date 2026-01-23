@@ -412,7 +412,7 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 - [x] Increase to nmax=10 (66 coefficients) via ElShowkBootstrapSolver
 - [x] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50 (via ElShowkBootstrapSolver)
 - [x] Implement T1-T5 multi-resolution discretization (via get_multiresolution_operators)
-- [ ] Match LP tolerances to serious solver
+- [x] Match LP tolerances to serious solver (1e-9 abs/rel tolerances, multi-solver support)
 
 See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
 
