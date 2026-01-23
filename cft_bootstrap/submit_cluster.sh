@@ -1,57 +1,134 @@
 #!/bin/bash
+#============================================================================
+# CFT Bootstrap SLURM Submission Script
+#============================================================================
+#
+# This script submits array jobs to compute conformal bootstrap bounds on a
+# HPC cluster using SLURM. It supports multiple methods including the El-Showk
+# et al. (2012) full derivative basis with spinning operators.
+#
+# USAGE:
+#   1. Edit configuration section below
+#   2. Submit: sbatch submit_cluster.sh
+#   3. Monitor: squeue -u $USER
+#   4. Collect results: python run_bootstrap.py --collect --output-dir results/
+#
+# REFERENCE:
+#   El-Showk et al., "Solving the 3D Ising Model with the Conformal Bootstrap"
+#   arXiv:1203.6064 (2012)
+#
+#============================================================================
+
 #SBATCH --job-name=cft_bootstrap
 #SBATCH --output=logs/bootstrap_%A_%a.out
 #SBATCH --error=logs/bootstrap_%A_%a.err
-#SBATCH --array=0-99
-#SBATCH --time=02:00:00
-#SBATCH --mem=4G
-#SBATCH --cpus-per-task=1
+#SBATCH --array=0-19
 
-# CFT Bootstrap SLURM submission script
-# Adjust the parameters below for your cluster
+# ============================================================================
+# RESOURCE CONFIGURATION
+# ============================================================================
+# Adjust based on method:
+#   - lp/sdp/cvxpy:  --mem=4G, --time=02:00:00, --cpus-per-task=1
+#   - el-showk:      --mem=16G, --time=08:00:00, --cpus-per-task=4
+#   - el-showk-sdpb: --mem=32G, --time=24:00:00, --cpus-per-task=8
 
-# ============================================
-# CONFIGURATION - MODIFY THESE
-# ============================================
+#SBATCH --time=08:00:00
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
 
-# Range of delta_sigma to scan
+# ============================================================================
+# CONFIGURATION - MODIFY THESE FOR YOUR RUN
+# ============================================================================
+
+# ---------- Grid Range ----------
+# Range of delta_sigma values to scan
 SIGMA_MIN=0.500
-SIGMA_MAX=0.650
+SIGMA_MAX=0.550
 
-# Number of points (should match --array above)
-N_POINTS=100
+# Number of points (should match --array above: 0 to N_POINTS-1)
+N_POINTS=20
 
-# Solver settings
-METHOD="lp"           # "lp" or "sdp"
-MAX_DERIV=11          # More derivatives = tighter bounds, slower
-TOLERANCE=0.005       # Precision of each bound
+# ---------- Method Selection ----------
+# Available methods:
+#   "lp"              - Linear programming (fast, basic)
+#   "sdp"             - Semidefinite programming via CVXPY
+#   "cvxpy"           - Discrete sampling with CVXPY
+#   "polynomial"      - Polynomial positivity with SOS constraints
+#   "hybrid"          - Polynomial + discrete samples
+#   "two-correlator"  - Two-correlator bootstrap (ssss + eeee)
+#   "mixed-correlator"- Full mixed correlator with matrix SDP
+#   "el-showk"        - El-Showk (2012) full derivative basis [RECOMMENDED]
+#   "el-showk-sdpb"   - El-Showk with SDPB high-precision solver
 
-# Output directory
-OUTPUT_DIR="results_${SIGMA_MIN}_${SIGMA_MAX}"
+METHOD="el-showk"
 
-# ============================================
-# SETUP
-# ============================================
+# ---------- General Solver Parameters ----------
+MAX_DERIV=20           # Derivative order (el-showk uses nmax = MAX_DERIV // 2)
+TOLERANCE=0.01         # Binary search tolerance
+POLY_DEGREE=15         # Polynomial degree (for polynomial/hybrid methods)
+
+# ---------- El-Showk Method Parameters ----------
+# These only apply when METHOD="el-showk" or "el-showk-sdpb"
+#
+# NMAX: Number of mixed derivatives (overrides MAX_DERIV // 2)
+#   - nmax=10 gives 66 coefficients (paper recommendation)
+#   - nmax=5 gives 21 coefficients (fast test)
+NMAX=10
+
+# MAX_SPIN: Maximum spin for spinning operators
+#   - Paper uses Lmax=100, but Lmax=50 is often sufficient
+#   - Set to 0 to disable spinning operators (scalars only)
+MAX_SPIN=50
+
+# USE_MULTIRESOLUTION: Enable T1-T5 style multi-resolution discretization
+#   - "true" = fine grid near unitarity, coarse grid at high Delta
+#   - "false" = uniform sampling (faster but less accurate)
+USE_MULTIRESOLUTION=true
+
+# EL_SHOWK_SOLVER: Backend solver for El-Showk method
+#   - "auto" = try CLARABEL > ECOS > MOSEK > SCS (recommended)
+#   - "scs"  = SCS solver (always available)
+#   - "ecos" = ECOS solver (if installed)
+#   - "clarabel" = CLARABEL solver (if installed, high precision)
+#   - "mosek" = MOSEK solver (if licensed)
+EL_SHOWK_SOLVER="auto"
+
+# ---------- SDPB Parameters ----------
+# Only for METHOD="sdpb" or "el-showk-sdpb"
+SDPB_THREADS=4         # Threads for SDPB
+SDPB_PRECISION=400     # Bits of precision
+
+# ---------- Output ----------
+OUTPUT_DIR="results_elshowk_${SIGMA_MIN}_${SIGMA_MAX}_nmax${NMAX}_spin${MAX_SPIN}"
+
+# ============================================================================
+# SETUP (usually no changes needed)
+# ============================================================================
 
 # Create output directories
 mkdir -p ${OUTPUT_DIR}
 mkdir -p logs
 
-# Load modules (adjust for your cluster)
+# Load modules (uncomment and adjust for your cluster)
 # module load python/3.9
 # module load scipy
 
-# Activate virtual environment if needed
+# Activate virtual environment (uncomment and adjust path)
 # source /path/to/venv/bin/activate
 
-# ============================================
-# RUN
-# ============================================
+# ============================================================================
+# BUILD COMMAND
+# ============================================================================
 
-echo "Running bootstrap job ${SLURM_ARRAY_TASK_ID} of ${N_POINTS}"
+echo "=============================================="
+echo "CFT Bootstrap Job ${SLURM_ARRAY_TASK_ID} of ${N_POINTS}"
+echo "=============================================="
+echo "Method: ${METHOD}"
 echo "Delta_sigma range: [${SIGMA_MIN}, ${SIGMA_MAX}]"
+echo "Output: ${OUTPUT_DIR}"
 
-python run_bootstrap.py \
+# Build base command
+CMD="python run_bootstrap.py \
     --array-job \
     --job-index ${SLURM_ARRAY_TASK_ID} \
     --n-jobs ${N_POINTS} \
@@ -60,6 +137,44 @@ python run_bootstrap.py \
     --method ${METHOD} \
     --max-deriv ${MAX_DERIV} \
     --tolerance ${TOLERANCE} \
-    --output-dir ${OUTPUT_DIR}
+    --poly-degree ${POLY_DEGREE} \
+    --output-dir ${OUTPUT_DIR}"
 
-echo "Job ${SLURM_ARRAY_TASK_ID} completed"
+# Add El-Showk specific flags if applicable
+if [[ "${METHOD}" == "el-showk"* ]]; then
+    echo "El-Showk parameters:"
+    echo "  nmax = ${NMAX}"
+    echo "  max_spin = ${MAX_SPIN}"
+    echo "  multiresolution = ${USE_MULTIRESOLUTION}"
+    echo "  solver = ${EL_SHOWK_SOLVER}"
+
+    CMD="${CMD} \
+        --nmax ${NMAX} \
+        --max-spin ${MAX_SPIN} \
+        --el-showk-solver ${EL_SHOWK_SOLVER}"
+
+    if [[ "${USE_MULTIRESOLUTION}" == "true" ]]; then
+        CMD="${CMD} --use-multiresolution"
+    fi
+fi
+
+# Add SDPB flags if applicable
+if [[ "${METHOD}" == *"sdpb"* ]]; then
+    CMD="${CMD} \
+        --sdpb-threads ${SDPB_THREADS} \
+        --sdpb-precision ${SDPB_PRECISION}"
+fi
+
+echo "=============================================="
+echo "Running command:"
+echo "${CMD}"
+echo "=============================================="
+
+# Execute
+${CMD}
+
+EXIT_CODE=$?
+echo "=============================================="
+echo "Job ${SLURM_ARRAY_TASK_ID} completed with exit code ${EXIT_CODE}"
+echo "=============================================="
+exit ${EXIT_CODE}
