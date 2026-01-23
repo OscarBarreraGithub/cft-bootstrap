@@ -52,7 +52,8 @@ from bootstrap_solver import BootstrapSolver, BootstrapBoundComputer
 from taylor_conformal_blocks import HighOrderGapBootstrapSolver
 from sdpb_interface import (
     SDPBSolver, SDPBConfig, FallbackSDPBSolver,
-    get_best_solver, compute_bound_with_sdpb
+    get_best_solver, compute_bound_with_sdpb,
+    ElShowkPolynomialApproximator
 )
 from polynomial_positivity import (
     PolynomialPositivitySolver,
@@ -235,6 +236,59 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
             use_multiresolution=use_multiresolution,
             verbose=True
         )
+    elif method == 'el-showk-sdpb':
+        # El-Showk basis with SDPB high-precision solver
+        actual_nmax = nmax if nmax is not None else max_deriv // 2
+        n_coeffs = count_coefficients(actual_nmax)
+
+        print(f"  Using El-Showk derivative basis with SDPB:")
+        print(f"    nmax = {actual_nmax} ({n_coeffs} coefficients)")
+        print(f"    max_spin = {max_spin}")
+        print(f"    poly_degree = {poly_degree}")
+
+        # Build polynomial approximator
+        approx = ElShowkPolynomialApproximator(
+            delta_sigma=delta_sigma,
+            nmax=actual_nmax,
+            max_spin=max_spin,
+            poly_degree=poly_degree
+        )
+
+        # Build PMP and run SDPB
+        config = SDPBConfig(num_threads=sdpb_threads)
+        solver = get_best_solver(config, max_deriv)
+
+        if isinstance(solver, SDPBSolver):
+            print("  Using SDPB solver")
+            # Generate PMP and solve
+            pmp = approx.build_polynomial_matrix_program(
+                delta_epsilon=delta_epsilon,
+                delta_epsilon_prime=delta_epsilon + 0.1,  # Initial guess
+                include_spinning=(max_spin > 0),
+                use_multiresolution=use_multiresolution
+            )
+            # Binary search for bound
+            bound = solver.find_bound_with_pmp(
+                delta_sigma, delta_epsilon,
+                pmp_builder=approx,
+                tolerance=tolerance,
+                verbose=True
+            )
+        else:
+            print("  SDPB not available, falling back to El-Showk with CVXPY")
+            solver = ElShowkBootstrapSolver(
+                d=3,
+                nmax=actual_nmax,
+                max_spin=max_spin,
+                solver=el_showk_solver
+            )
+            bound = solver.find_delta_epsilon_prime_bound(
+                delta_sigma, delta_epsilon,
+                tolerance=tolerance,
+                include_spinning=(max_spin > 0),
+                use_multiresolution=use_multiresolution,
+                verbose=True
+            )
     elif method == 'sdpb':
         # Try SDPB, fall back to CVXPY if not available
         config = SDPBConfig(num_threads=sdpb_threads)
@@ -670,11 +724,11 @@ Examples:
     # Solver options
     parser.add_argument('--method',
                        choices=['lp', 'sdp', 'sdpb', 'cvxpy', 'discrete', 'polynomial', 'hybrid',
-                                'two-correlator', 'mixed-correlator', 'el-showk'],
+                                'two-correlator', 'mixed-correlator', 'el-showk', 'el-showk-sdpb'],
                        default='lp',
                        help='Solver method: lp, sdp, sdpb, cvxpy/discrete, polynomial (SOS), hybrid, '
                             'two-correlator (ssss+eeee), mixed-correlator (full matrix SDP), '
-                            'el-showk (full derivative basis with nmax=max_deriv/2)')
+                            'el-showk (full derivative basis), el-showk-sdpb (El-Showk with SDPB)')
     parser.add_argument('--max-deriv', type=int, default=5,
                        help='Max derivative order (default: 5, use 21 for high precision)')
     parser.add_argument('--poly-degree', type=int, default=15,

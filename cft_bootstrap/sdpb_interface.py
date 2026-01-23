@@ -60,6 +60,23 @@ try:
 except ImportError:
     from taylor_conformal_blocks import TaylorCrossingVector, build_F_vector_taylor
 
+try:
+    from .el_showk_basis import (
+        ElShowkCrossingVector,
+        ElShowkBootstrapSolver,
+        count_coefficients,
+        get_multiresolution_operators,
+        get_simplified_multiresolution
+    )
+except ImportError:
+    from el_showk_basis import (
+        ElShowkCrossingVector,
+        ElShowkBootstrapSolver,
+        count_coefficients,
+        get_multiresolution_operators,
+        get_simplified_multiresolution
+    )
+
 
 @dataclass
 class SDPBConfig:
@@ -321,6 +338,216 @@ class PolynomialApproximator:
             matrix_entry.append(coeff_vec)
 
         # Wrap in matrix structure: [[[entry]]] for 1x1 matrix
+        return [[[matrix_entry]]]
+
+
+class ElShowkPolynomialApproximator:
+    """
+    Polynomial approximator for El-Showk F-vectors with spinning operators.
+
+    This extends PolynomialApproximator to work with the El-Showk (a,b) derivative
+    basis and spinning operators, enabling high-precision SDPB bounds.
+
+    The El-Showk basis uses mixed derivatives:
+        ∂_a^m ∂_b^n F(a,b)|_{a=0,b=0}  for m odd, m + 2n ≤ 2*nmax + 1
+
+    This gives more constraints than the standard Taylor approach.
+
+    Reference:
+        El-Showk et al., "Solving the 3D Ising Model with the Conformal Bootstrap"
+        arXiv:1203.6064 (2012)
+    """
+
+    def __init__(
+        self,
+        delta_sigma: float,
+        nmax: int = 10,
+        max_spin: int = 50,
+        poly_degree: int = 20,
+    ):
+        """
+        Initialize the El-Showk polynomial approximator.
+
+        Args:
+            delta_sigma: External operator dimension
+            nmax: El-Showk derivative order (nmax=10 gives 66 coefficients)
+            max_spin: Maximum spin for spinning operators
+            poly_degree: Degree of polynomial approximation
+        """
+        self.delta_sigma = delta_sigma
+        self.nmax = nmax
+        self.max_spin = max_spin
+        self.n_constraints = count_coefficients(nmax)
+        self.poly_degree = poly_degree
+
+        # El-Showk crossing vector computer
+        self.crossing = ElShowkCrossingVector(delta_sigma, nmax)
+
+    def unitarity_bound(self, ell: int, d: int = 3) -> float:
+        """Unitarity bound for spin ell operators in d dimensions."""
+        if ell == 0:
+            return (d - 2) / 2  # 0.5 for d=3
+        return ell + d - 2  # ell + 1 for d=3
+
+    def approximate_F_as_polynomial(
+        self,
+        delta_min: float,
+        delta_max: float,
+        spin: int = 0,
+        include_prefactor: bool = True
+    ) -> PolynomialVector:
+        """
+        Approximate F_Δ as a polynomial in x = Δ - delta_min for given spin.
+
+        Uses Chebyshev interpolation for numerical stability.
+
+        Args:
+            delta_min: Minimum dimension (gap for scalars, unitarity bound for spinning)
+            delta_max: Maximum dimension for fitting
+            spin: Operator spin (0, 2, 4, ...)
+            include_prefactor: Include damped rational prefactor for SDPB
+
+        Returns:
+            PolynomialVector with polynomial approximation
+        """
+        # Sample points using Chebyshev nodes
+        n_points = self.poly_degree + 1
+        cheb_nodes = np.cos(np.pi * (2 * np.arange(n_points) + 1) / (2 * n_points))
+        delta_samples = 0.5 * (delta_max - delta_min) * (cheb_nodes + 1) + delta_min
+
+        # Compute F-vectors at sample points
+        if spin == 0:
+            F_samples = np.array([self.crossing.build_F_vector(d) for d in delta_samples])
+        else:
+            F_samples = np.array([self.crossing.build_F_vector_spinning(d, spin)
+                                  for d in delta_samples])
+
+        # Fit polynomials in x = Δ - delta_min
+        x_samples = delta_samples - delta_min
+
+        polynomials = []
+        for i in range(self.n_constraints):
+            y_values = F_samples[:, i]
+            coeffs = np.polynomial.polynomial.polyfit(
+                x_samples, y_values, self.poly_degree
+            )
+            polynomials.append(coeffs)
+
+        result = PolynomialVector(polynomials=polynomials)
+
+        if include_prefactor:
+            result.prefactor_constant = 1.0
+            result.prefactor_base = np.exp(-1)
+            result.prefactor_poles = []
+
+        return result
+
+    def build_polynomial_matrix_program(
+        self,
+        delta_epsilon: float,
+        delta_epsilon_prime: float,
+        delta_max: float = 40.0,
+        include_spinning: bool = True,
+        use_multiresolution: bool = False,
+    ) -> Dict:
+        """
+        Build the Polynomial Matrix Program for SDPB with El-Showk basis.
+
+        Encodes:
+        - Normalization: α·F_id = 1
+        - First scalar positivity: α·F_ε ≥ 0
+        - Scalar gap positivity: α·F_Δ ≥ 0 for all Δ ≥ Δε'
+        - Spinning positivity: α·F_{Δ,ℓ} ≥ 0 for all spins ℓ and Δ ≥ unitarity bound
+
+        Args:
+            delta_epsilon: First scalar dimension
+            delta_epsilon_prime: Gap to second scalar
+            delta_max: Maximum dimension for polynomial fitting
+            include_spinning: Include spinning operators
+            use_multiresolution: Use T1-T5 style discretization for spins
+
+        Returns:
+            Dictionary with PMP data in SDPB JSON format
+        """
+        # Get F-vectors for identity and first scalar
+        F_id = self.crossing.build_F_vector(0)
+        F_eps = self.crossing.build_F_vector(delta_epsilon)
+
+        # Build PMP structure
+        pmp = {
+            "objective": self._format_vector(np.zeros(self.n_constraints)),
+            "normalization": self._format_vector(F_id),
+            "PositiveMatrixWithPrefactorArray": []
+        }
+
+        # Add discrete constraint for first scalar
+        pmp["PositiveMatrixWithPrefactorArray"].append({
+            "DampedRational": {
+                "constant": "1",
+                "base": "1",
+                "poles": []
+            },
+            "polynomials": [[
+                [self._format_vector(F_eps)]
+            ]]
+        })
+
+        # Add polynomial constraint for scalar gap
+        F_poly_scalar = self.approximate_F_as_polynomial(
+            delta_epsilon_prime, delta_max, spin=0
+        )
+        poly_matrix = self._build_polynomial_matrix(F_poly_scalar)
+        pmp["PositiveMatrixWithPrefactorArray"].append({
+            "DampedRational": {
+                "constant": str(F_poly_scalar.prefactor_constant),
+                "base": str(F_poly_scalar.prefactor_base),
+                "poles": [str(p) for p in F_poly_scalar.prefactor_poles]
+            },
+            "polynomials": poly_matrix
+        })
+
+        # Add polynomial constraints for spinning operators
+        if include_spinning and self.max_spin >= 2:
+            for ell in range(2, self.max_spin + 1, 2):
+                delta_min_spin = self.unitarity_bound(ell)
+                F_poly_spin = self.approximate_F_as_polynomial(
+                    delta_min_spin, delta_max, spin=ell
+                )
+                poly_matrix_spin = self._build_polynomial_matrix(F_poly_spin)
+                pmp["PositiveMatrixWithPrefactorArray"].append({
+                    "DampedRational": {
+                        "constant": str(F_poly_spin.prefactor_constant),
+                        "base": str(F_poly_spin.prefactor_base),
+                        "poles": [str(p) for p in F_poly_spin.prefactor_poles]
+                    },
+                    "polynomials": poly_matrix_spin
+                })
+
+        return pmp
+
+    def _format_vector(self, vec: np.ndarray) -> List[str]:
+        """Format numpy array as list of string numbers for JSON."""
+        return [f"{x:.15e}" for x in vec]
+
+    def _build_polynomial_matrix(self, F_poly: PolynomialVector) -> List:
+        """
+        Build polynomial matrix structure for SDPB.
+
+        SDPB expects polynomials as nested lists:
+        [[[degree_0_coeffs, degree_1_coeffs, ...]]] for 1x1 matrix
+        """
+        n_deg = max(len(p) for p in F_poly.polynomials)
+
+        matrix_entry = []
+        for d in range(n_deg):
+            coeff_vec = []
+            for i in range(self.n_constraints):
+                if d < len(F_poly.polynomials[i]):
+                    coeff_vec.append(f"{F_poly.polynomials[i][d]:.15e}")
+                else:
+                    coeff_vec.append("0")
+            matrix_entry.append(coeff_vec)
+
         return [[[matrix_entry]]]
 
 
