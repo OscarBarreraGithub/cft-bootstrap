@@ -169,31 +169,92 @@ squeue -u $USER
 python collect_and_plot.py --results-dir results_0.500_0.650
 ```
 
+## ⚠️ Critical Implementation Issues
+
+**This implementation cannot accurately reproduce El-Showk et al. (2012) Figure 6.** The following fundamental issues must be addressed:
+
+### 1. Numerical Instability (CRITICAL)
+
+**Location:** [el_showk_basis.py:287-357](cft_bootstrap/el_showk_basis.py#L287-L357)
+
+The derivative computation uses **finite differences** with step size `h=0.02`:
+
+```python
+def _numerical_derivative(self, delta, m, n, h_a=0.02, h_b=0.02):
+    # Central differences for ∂_a^m ∂_b^n F
+```
+
+**Problem:** For `nmax=10` (paper's value), we need derivatives up to order ~20. The roundoff error grows as:
+```
+error ≈ ε_machine / h^n ≈ 10^-16 / 0.02^20 ≈ 10^18
+```
+
+This is **catastrophic cancellation**. The paper used **exact rational arithmetic** (via GMP/MPFR in SDPB) to avoid this entirely.
+
+**Status:** ❌ NOT SOLVED - requires rewriting derivative computation with arbitrary precision (mpmath) or analytical recursion relations.
+
+### 2. Missing Spinning Operators in Stage 1
+
+**Location:** [run_bootstrap.py:471-474](cft_bootstrap/run_bootstrap.py#L471-L474)
+
+The Figure 6 two-stage computation uses `BootstrapSolver` for Stage 1 (finding Δε boundary):
+
+```python
+basic_solver = BootstrapSolver(d=3, max_deriv=max_deriv)
+delta_epsilon = basic_solver.find_bound(delta_sigma, method='lp', ...)
+```
+
+**Problem:** `BootstrapSolver` and `taylor_conformal_blocks.py` include **scalars only** (ℓ=0). The paper includes spinning operators (stress tensor ℓ=2, Δ=3, etc.) which significantly tighten the bounds.
+
+**Impact:** The Δε boundary curve will be **above** the true boundary, shifting the kink location.
+
+**Status:** ⚠️ PARTIAL - Stage 2 (`el_showk_basis.py`) includes spinning operators, but Stage 1 does not.
+
+### 3. SDPB Data Source Mismatch
+
+**Location:** [sdpb_interface.py:172](cft_bootstrap/sdpb_interface.py#L172)
+
+The basic `PolynomialApproximator` feeds SDPB data from `taylor_conformal_blocks.py`:
+
+```python
+self.crossing = TaylorCrossingVector(delta_sigma, max_deriv)  # Scalar-only!
+```
+
+**Problem:** Even when using SDPB (the gold-standard solver), we're feeding it **scalar-only** crossing data, missing the crucial spinning operator contributions.
+
+**Note:** `ElShowkPolynomialApproximator` was added to address this, but it inherits the finite-difference instability from Issue #1.
+
+**Status:** ⚠️ PARTIAL - architecture exists but blocked by Issue #1.
+
+---
+
 ## Known Issues & Limitations
 
 ### Numerical Precision
 
 - **Finite differences** (m > 7): Unstable due to error accumulation
-  - ✅ **SOLVED**: Use Taylor series expansion (`taylor_conformal_blocks.py`)
+  - ⚠️ **PARTIAL**: Taylor series (`taylor_conformal_blocks.py`) helps for scalars but doesn't solve spinning blocks
 
 - **CVXPY SDP** (11+ constraints): Condition numbers grow to 10^15
   - ✅ **SOLVED**: Use SDPB integration (`sdpb_interface.py`)
 
 ### Current Gap to Literature
 
-Our Δε' bounds are ~1.3 units below El-Showk et al. (2012). Causes:
+Our Δε' bounds are ~1.3 units below El-Showk et al. (2012). Root causes:
 
 | Factor | Our Implementation | Reference | Impact |
 |--------|-------------------|-----------|--------|
-| Derivative constraints | 6-11 | ~60+ | HIGH |
+| **Derivative precision** | float64 finite diff | Rational arithmetic | **CRITICAL** |
+| **Spinning operators** | Stage 2 only | Both stages | HIGH |
+| Derivative constraints | 6-11 | ~66 | HIGH |
 | Polynomial positivity | Discrete sampling | Continuous | MEDIUM |
-| Mixed correlators | ⟨σσσσ⟩ only | Multiple | HIGH |
 
 ### Remaining Work for Publication Quality
 
-1. **Polynomial positivity constraints** - Enforce α·F_Δ ≥ 0 for ALL Δ ≥ gap
-2. **Mixed correlator bootstrap** - Add ⟨σσεε⟩ and ⟨εεεε⟩ correlators
-3. **More constraints with SDPB** - Enable 60+ derivative constraints
+1. **🔴 Arbitrary precision derivatives** - Replace finite differences with mpmath or analytical recursion
+2. **🟡 Spinning operators in Stage 1** - Add spinning blocks to `BootstrapSolver`
+3. **🟡 Polynomial positivity constraints** - Enforce α·F_Δ ≥ 0 for ALL Δ ≥ gap
+4. **🟢 More constraints with SDPB** - Enable 60+ derivative constraints (blocked by #1)
 
 ## Results
 
