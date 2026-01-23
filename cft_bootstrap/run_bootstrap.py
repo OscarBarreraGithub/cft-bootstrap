@@ -663,6 +663,18 @@ Examples:
     parser.add_argument('--sdpb-precision', type=int, default=400,
                        help='SDPB precision in bits (default: 400)')
 
+    # El-Showk method specific options
+    parser.add_argument('--max-spin', type=int, default=50,
+                       help='Maximum spin for El-Showk solver spinning operators (default: 50, paper uses 100)')
+    parser.add_argument('--use-multiresolution', action='store_true',
+                       help='Use T1-T5 style multi-resolution discretization for operator sampling')
+    parser.add_argument('--el-showk-solver',
+                       choices=['auto', 'scs', 'ecos', 'clarabel', 'mosek'],
+                       default='auto',
+                       help='Solver backend for El-Showk method (default: auto)')
+    parser.add_argument('--nmax', type=int, default=None,
+                       help='El-Showk nmax parameter directly (overrides --max-deriv//2 for el-showk method)')
+
     # Output
     parser.add_argument('--output', '-o', type=str, help='Output file')
     parser.add_argument('--output-dir', type=str, default='results')
