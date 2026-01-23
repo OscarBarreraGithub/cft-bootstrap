@@ -1,10 +1,10 @@
-# Roadmap: Matching El-Showk et al. (2012) Figure 7
+# Roadmap: Matching El-Showk et al. (2012) Figure 6
 
 This document outlines what is needed to exactly reproduce the Δε' bounds from:
 
 > **"Solving the 3D Ising Model with the Conformal Bootstrap"**
 > S. El-Showk, M. Paulos, D. Poland, S. Rychkov, D. Simmons-Duffin, A. Vichi
-> [arXiv:1203.6064](https://arxiv.org/abs/1203.6064) (2012), Figure 7
+> [arXiv:1203.6064](https://arxiv.org/abs/1203.6064) (2012), Figure 6
 
 ## Current Status
 
@@ -313,7 +313,7 @@ Implemented the pycftboot-style reshuffling normalization across all solvers:
 - [x] Crossing equation setup
 - [x] SDP solver integration (CVXPY)
 - [x] Gap-based Δε' bounds
-- [x] Qualitative reproduction of Figure 7 shape
+- [x] Qualitative reproduction of Figure 6 shape
 - [x] Literature Δε boundary values
 - [x] Taylor series conformal blocks (high-order derivatives)
 - [x] Spinning conformal blocks (radial expansion)
@@ -397,19 +397,19 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 
 | Priority | Task | Impact | Status |
 |----------|------|--------|--------|
-| **1** | **Fix figure reference** (Fig. 6 not Fig. 7) | Correctness | ⬜ Next |
-| **2** | **Implement two-stage pipeline** | CRITICAL - may fix gap | ⬜ |
+| **1** | **Fix figure reference** (Fig. 6 not Fig. 7) | Correctness | ✅ Done |
+| **2** | **Implement two-stage pipeline** | CRITICAL - may fix gap | ✅ Done |
 | **3** | **Add spinning operators (Lmax≥50)** | HIGH | ⬜ |
-| **4** | **Implement (a,b) derivative basis with nmax=10** | HIGH | ⬜ |
+| **4** | **Implement (a,b) derivative basis with nmax=10** | HIGH | ✅ Done |
 | **5** | **Multi-resolution discretization (T1-T5)** | MEDIUM | ⬜ |
 | 6 | Install SDPB for smooth curves | LOW | ⬜ |
 
 ### Minimal Checklist for Fig. 6 Reproduction
 
-- [ ] Rename files: `fig7` → `fig6`
-- [ ] Implement two-stage scan (Δε boundary first, then Δε' with Δε fixed)
-- [ ] Implement (a,b) coordinate derivatives at (a=1, b=0)
-- [ ] Increase to nmax=10 (66 coefficients)
+- [x] Rename files: `fig7` → `fig6`
+- [x] Implement two-stage scan (Δε boundary first, then Δε' with Δε fixed)
+- [x] Implement (a,b) coordinate derivatives at (a=0, b=0) with mixed derivatives
+- [x] Increase to nmax=10 (66 coefficients) via ElShowkBootstrapSolver
 - [ ] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50
 - [ ] Implement T1-T5 multi-resolution discretization
 - [ ] Match LP tolerances to serious solver

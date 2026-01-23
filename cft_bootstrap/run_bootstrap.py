@@ -64,6 +64,12 @@ from mixed_correlator_bootstrap import (
     MixedCorrelatorBootstrapSolver,
     compare_single_vs_mixed
 )
+from el_showk_basis import (
+    ElShowkBootstrapSolver,
+    ElShowkCrossingVector,
+    count_coefficients,
+    get_derivative_indices
+)
 
 # Silence the CVXPY warning
 import warnings
@@ -192,6 +198,17 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
             delta_sigma, delta_epsilon,
             tolerance=tolerance,
             verbose=True
+        )
+    elif method == 'el-showk':
+        # El-Showk et al. (2012) full derivative basis
+        # Convert max_deriv to nmax: nmax=10 gives 66 coefficients
+        nmax = max_deriv // 2  # Approximate conversion
+        n_coeffs = count_coefficients(nmax)
+        print(f"  Using El-Showk derivative basis (nmax={nmax}, {n_coeffs} coefficients)")
+        solver = ElShowkBootstrapSolver(d=3, nmax=nmax)
+        bound = solver.find_delta_epsilon_prime_bound(
+            delta_sigma, delta_epsilon,
+            tolerance=tolerance
         )
     elif method == 'sdpb':
         # Try SDPB, fall back to CVXPY if not available
@@ -363,6 +380,70 @@ def collect_array_results(output_dir: str = 'results', output_file: str = 'combi
     print(f"Combined {len(files)} results into {output_file}")
 
 
+def run_two_stage_scan(max_deriv: int = 11, tolerance: float = 0.02,
+                       sigma_min: float = 0.50, sigma_max: float = 0.60,
+                       n_points: int = 25, output_file: Optional[str] = None):
+    """
+    Run two-stage scan following El-Showk et al. (2012) Figure 6 protocol.
+
+    This is the CORRECT way to reproduce the paper's Δε' bounds:
+    1. Stage 1: Compute Δε boundary for each Δσ
+    2. Stage 2: Compute Δε' bound with Δε fixed to boundary
+
+    Args:
+        max_deriv: Maximum derivative order (used for both stages)
+        tolerance: Binary search tolerance
+        sigma_min: Minimum Δσ value
+        sigma_max: Maximum Δσ value
+        n_points: Number of points to compute
+        output_file: Output file path
+
+    Returns:
+        Array of shape (n_points, 3) with [Δσ, Δε_max, Δε'_bound]
+    """
+    from bootstrap_gap_solver import DeltaEpsilonPrimeBoundComputer
+
+    t0 = time.time()
+
+    computer = DeltaEpsilonPrimeBoundComputer(d=3, max_deriv=max_deriv)
+    results = computer.compute_two_stage_scan(
+        delta_sigma_min=sigma_min,
+        delta_sigma_max=sigma_max,
+        n_points=n_points,
+        tolerance_stage1=tolerance,
+        tolerance_stage2=tolerance,
+        verbose=True
+    )
+
+    t1 = time.time()
+
+    print(f"\nTotal compute time: {t1-t0:.1f}s ({(t1-t0)/n_points:.2f}s per point)")
+
+    # Save results
+    output = {
+        'delta_sigma': results[:, 0].tolist(),
+        'delta_epsilon_max': results[:, 1].tolist(),
+        'delta_epsilon_prime_bound': results[:, 2].tolist(),
+        'method': 'two_stage',
+        'max_deriv': max_deriv,
+        'n_constraints': (max_deriv + 1) // 2,
+        'tolerance': tolerance,
+        'total_time_seconds': t1 - t0,
+    }
+
+    if output_file:
+        with open(output_file, 'w') as f:
+            json.dump(output, f, indent=2)
+        print(f"Saved to {output_file}")
+
+        # Also save as numpy
+        np_file = output_file.replace('.json', '.npy')
+        np.save(np_file, results)
+        print(f"Saved numpy array to {np_file}")
+
+    return results
+
+
 def run_ising_plot(method: str = 'polynomial', max_deriv: int = 21,
                    poly_degree: int = 15, tolerance: float = 0.02,
                    sigma_min: float = 0.50, sigma_max: float = 0.60,
@@ -370,7 +451,7 @@ def run_ising_plot(method: str = 'polynomial', max_deriv: int = 21,
     """
     Compute Δε' bounds along the Δε boundary curve (Ising plot).
 
-    This reproduces the plot from El-Showk et al. (2012) Figure 7.
+    This reproduces the plot from El-Showk et al. (2012) Figure 6.
 
     Args:
         method: 'polynomial', 'hybrid', or 'discrete'
@@ -518,6 +599,9 @@ Examples:
     # Ising plot (Δε' bounds along the boundary curve)
     python run_bootstrap.py --ising-plot --method polynomial --n-points 25
 
+    # Two-stage scan (El-Showk 2012 Fig. 6 protocol)
+    python run_bootstrap.py --two-stage --sigma-min 0.50 --sigma-max 0.60 --n-points 25
+
     # Compare discrete vs polynomial methods
     python run_bootstrap.py --compare --max-deriv 11 --poly-degree 12
 
@@ -531,7 +615,9 @@ Examples:
     parser.add_argument('--gap-bound', action='store_true',
                        help='Compute Δε\' bound with gap assumption')
     parser.add_argument('--ising-plot', action='store_true',
-                       help='Compute Δε\' bounds along the Δε boundary (Fig. 7)')
+                       help='Compute Δε\' bounds along the Δε boundary (Fig. 6)')
+    parser.add_argument('--two-stage', action='store_true',
+                       help='Two-stage scan: compute Δε boundary, then Δε\' (El-Showk 2012 Fig. 6 protocol)')
     parser.add_argument('--compare', action='store_true',
                        help='Compare polynomial positivity vs discrete sampling')
     parser.add_argument('--array-job', action='store_true', help='Run as SLURM array job')
@@ -559,10 +645,11 @@ Examples:
     # Solver options
     parser.add_argument('--method',
                        choices=['lp', 'sdp', 'sdpb', 'cvxpy', 'discrete', 'polynomial', 'hybrid',
-                                'two-correlator', 'mixed-correlator'],
+                                'two-correlator', 'mixed-correlator', 'el-showk'],
                        default='lp',
                        help='Solver method: lp, sdp, sdpb, cvxpy/discrete, polynomial (SOS), hybrid, '
-                            'two-correlator (ssss+eeee), mixed-correlator (full matrix SDP)')
+                            'two-correlator (ssss+eeee), mixed-correlator (full matrix SDP), '
+                            'el-showk (full derivative basis with nmax=max_deriv/2)')
     parser.add_argument('--max-deriv', type=int, default=5,
                        help='Max derivative order (default: 5, use 21 for high precision)')
     parser.add_argument('--poly-degree', type=int, default=15,
@@ -608,6 +695,17 @@ Examples:
             method=args.method if args.method in ['polynomial', 'hybrid', 'discrete'] else 'polynomial',
             max_deriv=args.max_deriv,
             poly_degree=args.poly_degree,
+            tolerance=args.tolerance,
+            sigma_min=args.sigma_min,
+            sigma_max=args.sigma_max,
+            n_points=args.n_points,
+            output_file=output
+        )
+    elif args.two_stage:
+        # Two-stage scan (El-Showk 2012 Fig. 6 protocol)
+        output = args.output or f'two_stage_scan_{args.n_points}pts.json'
+        run_two_stage_scan(
+            max_deriv=args.max_deriv,
             tolerance=args.tolerance,
             sigma_min=args.sigma_min,
             sigma_max=args.sigma_max,

@@ -68,7 +68,7 @@ Claude Mathematica/
 ├── notebooks/                  # Jupyter notebooks
 │   └── reproduce_ising_delta_epsilon_prime.ipynb  # Reproduce El-Showk 2012 Fig. 7
 └── reference_plots/            # Reference and reproduced plots
-    ├── el_showk_2012_fig7_delta_epsilon_prime.png  # Original from paper
+    ├── el_showk_2012_fig6_delta_epsilon_prime.png  # Original from paper
     └── reproduced_delta_epsilon_prime.png          # Our reproduction
 ```
 
@@ -105,7 +105,7 @@ The 3D Ising model (Δσ ≈ 0.518, Δε ≈ 1.41) is correctly inside the allow
 
 **Δε' bounds** (second scalar, with gap assumption):
 
-We partially reproduce the upper bound on Δε' from [El-Showk et al. (2012) Figure 7](https://arxiv.org/abs/1203.6064):
+We partially reproduce the upper bound on Δε' from [El-Showk et al. (2012) Figure 6](https://arxiv.org/abs/1203.6064):
 
 | Δσ | Δε (assumed) | Our Δε' bound | Reference |
 |-----|--------------|---------------|-----------|
@@ -210,7 +210,7 @@ docker pull bootstrapcollaboration/sdpb
 
 **From source:** See [SDPB GitHub](https://github.com/davidsd/sdpb)
 
-### Reproducing the Δε' Plot (El-Showk et al. 2012, Fig. 7)
+### Reproducing the Δε' Plot (El-Showk et al. 2012, Fig. 6)
 
 The Jupyter notebook `notebooks/reproduce_ising_delta_epsilon_prime.ipynb` reproduces the famous plot showing the upper bound on Δε' (second Z₂-even scalar). This can be run locally:
 

@@ -7,7 +7,7 @@ scalar at Δε.
 
 This partially reproduces results from:
   "Solving the 3D Ising Model with the Conformal Bootstrap"
-  El-Showk et al., arXiv:1203.6064 (2012), Figure 7
+  El-Showk et al., arXiv:1203.6064 (2012), Figure 6
 
 The key insight: instead of just demanding Δ ≥ Δε_gap for ALL scalars
 in the OPE, we:
@@ -300,7 +300,7 @@ class DeltaEpsilonPrimeBoundComputer:
     """
     Compute Δε' bounds over a 2D grid of (Δσ, Δε) values.
 
-    This allows partially reproducing Figure 7 from El-Showk et al. (2012).
+    This allows partially reproducing Figure 6 from El-Showk et al. (2012).
 
     Note: Our bounds are ~1 unit below the paper due to fewer constraints
     and no spinning operators. The qualitative shape is correct.
@@ -495,6 +495,118 @@ class DeltaEpsilonPrimeBoundComputer:
         )
 
         return interp_func
+
+    def compute_two_stage_scan(
+        self,
+        delta_sigma_min: float = 0.50,
+        delta_sigma_max: float = 0.60,
+        n_points: int = 25,
+        tolerance_stage1: float = 0.02,
+        tolerance_stage2: float = 0.02,
+        max_deriv_stage1: int = None,
+        max_deriv_stage2: int = None,
+        verbose: bool = True
+    ) -> np.ndarray:
+        """
+        Two-stage scan following El-Showk et al. (2012) Figure 6 protocol.
+
+        This is the CORRECT protocol for computing Δε' bounds:
+        1. Stage 1: For each Δσ, compute Δε,max(Δσ) - the bootstrap upper bound
+        2. Stage 2: With Δε fixed to Δε,max, compute the Δε' upper bound
+
+        The paper uses nmax=11 for Stage 1 and nmax=10 for Stage 2.
+
+        Args:
+            delta_sigma_min: Minimum Δσ value
+            delta_sigma_max: Maximum Δσ value
+            n_points: Number of points to compute
+            tolerance_stage1: Binary search tolerance for Δε boundary
+            tolerance_stage2: Binary search tolerance for Δε' bound
+            max_deriv_stage1: Max derivative order for Stage 1 (default: same as self)
+            max_deriv_stage2: Max derivative order for Stage 2 (default: same as self)
+            verbose: Print progress
+
+        Returns:
+            Array of shape (N, 3) with [Δσ, Δε_max, Δε'_bound]
+        """
+        try:
+            from .bootstrap_solver import BootstrapSolver
+        except ImportError:
+            from bootstrap_solver import BootstrapSolver
+
+        # Default to same max_deriv for both stages if not specified
+        if max_deriv_stage1 is None:
+            max_deriv_stage1 = self.max_deriv
+        if max_deriv_stage2 is None:
+            max_deriv_stage2 = self.max_deriv
+
+        delta_sigmas = np.linspace(delta_sigma_min, delta_sigma_max, n_points)
+        results = []
+
+        if verbose:
+            print("=" * 60)
+            print("Two-Stage Scan: El-Showk et al. (2012) Figure 6 Protocol")
+            print("=" * 60)
+            print(f"Δσ range: [{delta_sigma_min}, {delta_sigma_max}]")
+            print(f"Points: {n_points}")
+            print(f"Stage 1 (Δε boundary): {(max_deriv_stage1 + 1) // 2} constraints")
+            print(f"Stage 2 (Δε' bound): {(max_deriv_stage2 + 1) // 2} constraints")
+            print(f"Solver: {'SDP (CVXPY)' if HAS_CVXPY else 'LP (scipy)'}")
+            print("=" * 60)
+
+        # Create Stage 1 solver (for Δε boundary)
+        stage1_solver = BootstrapSolver(d=3, max_deriv=max_deriv_stage1)
+
+        # Create Stage 2 solver (for Δε' bound)
+        stage2_solver = GapBootstrapSolver(d=3, max_deriv=max_deriv_stage2)
+
+        for i, ds in enumerate(delta_sigmas):
+            if verbose:
+                print(f"\n[{i+1}/{n_points}] Δσ = {ds:.4f}")
+                print("-" * 40)
+
+            # Stage 1: Compute Δε boundary
+            if verbose:
+                print(f"  Stage 1: Computing Δε boundary... ", end='', flush=True)
+
+            method = 'sdp' if HAS_CVXPY else 'lp'
+            delta_eps_max = stage1_solver.find_bound(
+                ds, delta_min=0.5, delta_max=3.0,
+                tolerance=tolerance_stage1, method=method
+            )
+
+            if verbose:
+                print(f"Δε ≤ {delta_eps_max:.4f}")
+
+            # Stage 2: Compute Δε' bound with Δε fixed to boundary
+            if verbose:
+                print(f"  Stage 2: Computing Δε' bound (Δε = {delta_eps_max:.4f})... ", end='', flush=True)
+
+            delta_eps_prime_bound = stage2_solver.find_delta_epsilon_prime_bound(
+                ds, delta_eps_max,
+                tolerance=tolerance_stage2
+            )
+
+            if verbose:
+                print(f"Δε' ≤ {delta_eps_prime_bound:.4f}")
+
+            results.append([ds, delta_eps_max, delta_eps_prime_bound])
+
+        results = np.array(results)
+
+        if verbose:
+            print("\n" + "=" * 60)
+            print("Two-Stage Scan Complete")
+            print("=" * 60)
+            print("\nResults:")
+            print("-" * 40)
+            print("  Δσ        Δε_max    Δε'_bound")
+            print("-" * 40)
+            for ds, de_max, dep in results:
+                print(f"  {ds:.4f}    {de_max:.4f}    {dep:.4f}")
+            print("-" * 40)
+
+        return results
 
     def compute_ising_plot(
         self,

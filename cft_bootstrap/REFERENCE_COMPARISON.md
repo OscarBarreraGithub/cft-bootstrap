@@ -4,7 +4,7 @@ This document provides detailed instructions for comparing our conformal bootstr
 
 ## Problem Statement
 
-We are trying to reproduce Figure 7 from El-Showk et al. (2012) "Solving the 3D Ising Model with the Conformal Bootstrap" (arXiv:1203.6064).
+We are trying to reproduce Figure 6 from El-Showk et al. (2012) "Solving the 3D Ising Model with the Conformal Bootstrap" (arXiv:1203.6064).
 
 **Expected result:** At the 3D Ising point (Δσ ≈ 0.518, Δε ≈ 1.41), the upper bound on Δε' should be approximately 3.8.
 
@@ -290,7 +290,7 @@ After this comparison, we should know:
 - **Figure 7 in the paper is a spin-2 (T') bound**
 - **Figure 6 is the Δε' bound we actually want**
 
-**Action:** Rename `el_showk_2012_fig7_delta_epsilon_prime.png` to `fig6` and update all references.
+**Action:** ✅ DONE - Renamed `el_showk_2012_fig7_delta_epsilon_prime.png` to `fig6` and updated all references.
 
 ### Issue 2: Two-Stage Pipeline Missing
 
@@ -361,9 +361,9 @@ where (a,b) are the paper's variables (Section 4), and only odd a-derivatives co
 
 To reproduce the reference Δε' curve (paper Figure 6), we need:
 
-- [ ] **Fix figure reference**: Target Fig. 6, not Fig. 7
-- [ ] **Two-stage scan**: Compute Δε,max(Δσ) first, then Δε' with Δε fixed to boundary
-- [ ] **Derivative basis**: Implement full nmax=10 (66 coefficients) in (a,b) coordinates
+- [x] **Fix figure reference**: Target Fig. 6, not Fig. 7
+- [x] **Two-stage scan**: Compute Δε,max(Δσ) first, then Δε' with Δε fixed to boundary
+- [x] **Derivative basis**: Implement full nmax=10 (66 coefficients) in (a,b) coordinates
 - [ ] **Spinning operators**: Include spins l = 0, 2, 4, ... up to Lmax ≥ 50
 - [ ] **Multi-resolution discretization**: Implement T1-T5 style tables
 - [ ] **LP numerics**: Match tolerances to serious LP solver
