@@ -233,6 +233,57 @@ np.save('delta_epsilon_prime_bounds.npy', results)
 "
 ```
 
+### El-Showk Method (High-Precision Cluster Execution)
+
+The El-Showk method implements the full derivative basis from [El-Showk et al. (2012)](https://arxiv.org/abs/1203.6064) with spinning operators up to Lmax=50+ and multi-resolution discretization.
+
+**Local execution:**
+```bash
+# Basic El-Showk (scalars only, fast test)
+python run_bootstrap.py --gap-bound --method el-showk --nmax 5 --max-spin 0
+
+# With spinning operators (recommended)
+python run_bootstrap.py --gap-bound --method el-showk --nmax 10 --max-spin 50
+
+# With multi-resolution discretization (paper's T1-T5 tables)
+python run_bootstrap.py --gap-bound --method el-showk --nmax 10 --max-spin 50 --use-multiresolution
+
+# With SDPB high-precision solver
+python run_bootstrap.py --gap-bound --method el-showk-sdpb --nmax 10 --max-spin 50
+```
+
+**Cluster execution:**
+```bash
+# 1. Edit configuration in submit_cluster.sh:
+#    - Set METHOD="el-showk"
+#    - Set NMAX=10 (66 coefficients)
+#    - Set MAX_SPIN=50 (spinning operators)
+#    - Set USE_MULTIRESOLUTION=true
+
+# 2. Submit array job
+sbatch submit_cluster.sh
+
+# 3. Monitor progress
+squeue -u $USER
+
+# 4. Collect results
+python run_bootstrap.py --collect --output-dir results_elshowk_*
+```
+
+**Resource requirements:**
+
+| Method | Memory | Time/point | Notes |
+|--------|--------|------------|-------|
+| el-showk (nmax=5, spin=0) | 4 GB | ~1 min | Fast test |
+| el-showk (nmax=10, spin=50) | 16 GB | ~1-2 hours | Production |
+| el-showk-sdpb | 32 GB | ~4-8 hours | High precision |
+
+**Parameters:**
+- `--nmax`: Derivative order (nmax=10 gives 66 coefficients, matching paper)
+- `--max-spin`: Maximum spin for spinning operators (paper uses 100, 50 often sufficient)
+- `--use-multiresolution`: Enable T1-T5 style discretization
+- `--el-showk-solver`: Backend solver (auto/scs/ecos/clarabel/mosek)
+
 ### Using the Wolfram MCP Server
 
 The MCP server gives Claude access to Mathematica. Key tools:

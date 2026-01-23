@@ -416,19 +416,51 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 
 See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
 
+### January 2026 Update: CLI and Cluster Integration
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| El-Showk CLI arguments | ✅ Done | `--max-spin`, `--use-multiresolution`, `--el-showk-solver`, `--nmax` |
+| SBATCH script for El-Showk | ✅ Done | Full configuration with resource guidelines |
+| ElShowkPolynomialApproximator | ✅ Done | SDPB integration for El-Showk basis |
+| `--method el-showk-sdpb` | ✅ Done | High-precision SDPB with El-Showk |
+| Documentation | ✅ Done | README.md cluster instructions |
+
+**Usage:**
+```bash
+# Local execution with full parameters
+python run_bootstrap.py --gap-bound --method el-showk --nmax 10 --max-spin 50 --use-multiresolution
+
+# Cluster execution
+sbatch submit_cluster.sh  # After editing configuration
+
+# High-precision SDPB
+python run_bootstrap.py --gap-bound --method el-showk-sdpb --nmax 10 --max-spin 50
+```
+
 ---
 
 ## Files
 
+### Core Solvers
 - `cft_bootstrap/bootstrap_solver.py` - Basic bootstrap solver
 - `cft_bootstrap/bootstrap_gap_solver.py` - Gap-based solver for Δε' bounds
+- `cft_bootstrap/el_showk_basis.py` - **El-Showk (2012) full derivative basis with spinning operators**
 - `cft_bootstrap/taylor_conformal_blocks.py` - Taylor series implementation for scalars
 - `cft_bootstrap/spinning_conformal_blocks.py` - Spinning conformal blocks (radial expansion)
-- `cft_bootstrap/sdpb_interface.py` - SDPB integration module
 - `cft_bootstrap/polynomial_positivity.py` - Polynomial positivity via SOS constraints
 - `cft_bootstrap/mixed_correlator_blocks.py` - F-vectors for mixed correlators
 - `cft_bootstrap/mixed_correlator_bootstrap.py` - Mixed correlator bootstrap solvers
-- `cft_bootstrap/run_bootstrap.py` - CLI with `--method two-correlator/mixed-correlator`
+
+### SDPB Integration
+- `cft_bootstrap/sdpb_interface.py` - SDPB integration + **ElShowkPolynomialApproximator**
+
+### CLI and Cluster
+- `cft_bootstrap/run_bootstrap.py` - **Full CLI with `--method el-showk`, `--method el-showk-sdpb`**
+- `cft_bootstrap/submit_cluster.sh` - **SLURM script with El-Showk configuration**
+- `cft_bootstrap/collect_and_plot.py` - Result collection and plotting
+
+### Tests and Notebooks
 - `cft_bootstrap/tests/test_mixed_correlator.py` - Tests for mixed correlator bootstrap
 - `cft_bootstrap/tests/test_polynomial_positivity.py` - Tests for polynomial positivity
 - `notebooks/reproduce_ising_delta_epsilon_prime.ipynb` - Jupyter notebook
