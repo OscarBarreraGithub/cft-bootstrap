@@ -32,6 +32,11 @@ try:
 except ImportError:
     from spinning_conformal_blocks import SpinningConformalBlock
 
+try:
+    from .analytical_derivatives import AnalyticalCrossingDerivatives, HAS_MPMATH
+except ImportError:
+    from analytical_derivatives import AnalyticalCrossingDerivatives, HAS_MPMATH
+
 
 def get_derivative_indices(nmax: int) -> List[Tuple[int, int]]:
     """
@@ -232,19 +237,40 @@ class ElShowkCrossingVector:
     contribute due to crossing symmetry.
     """
 
-    def __init__(self, delta_sigma: float, nmax: int = 10):
+    def __init__(self, delta_sigma: float, nmax: int = 10, use_analytical: bool = None):
         """
         Initialize the crossing vector computer.
 
         Args:
             delta_sigma: External scalar dimension
             nmax: Derivative order (paper uses nmax=10 for 66 coefficients)
+            use_analytical: Use analytical derivatives instead of finite differences.
+                           Default: True for nmax >= 5, False for nmax < 5.
+                           Analytical derivatives are more stable at high orders
+                           but slower. For quick tests with low nmax, finite
+                           differences are acceptable.
         """
         self.delta_sigma = delta_sigma
         self.nmax = nmax
         self.blocks = ConformalBlock3D()
         self.indices = get_derivative_indices(nmax)
         self.n_coeffs = len(self.indices)
+
+        # Default: use analytical for high nmax, finite diff for low nmax
+        if use_analytical is None:
+            use_analytical = (nmax >= 5)
+
+        self.use_analytical = use_analytical
+
+        if use_analytical:
+            # Initialize analytical derivative computer
+            max_order = max(m + n for m, n in self.indices)
+            self._analytical = AnalyticalCrossingDerivatives(
+                delta_sigma,
+                n_terms=max(50, max_order + 10)
+            )
+        else:
+            self._analytical = None
 
     def _a_b_to_z_zbar(self, a: float, b: float) -> Tuple[float, float]:
         """
@@ -361,10 +387,18 @@ class ElShowkCrossingVector:
         Build the full F-vector for an operator of dimension delta.
 
         Returns array of shape (n_coeffs,) containing:
-            F_{m,n} = (1/m!n!) ∂_a^m ∂_b^n F(a,b)|_{a=1,b=0}
+            F_{m,n} = (1/m!n!) ∂_a^m ∂_b^n F(a,b)|_{a=0,b=0}
 
         for all (m,n) in the derivative basis.
+
+        Uses analytical derivatives when enabled (more stable at high orders
+        but slower). For quick tests with low nmax, finite differences are used.
         """
+        if self.use_analytical and self._analytical is not None:
+            # Use the analytically computed derivatives (Richardson extrapolation)
+            return self._analytical.build_F_vector(delta, self.indices, ell=0)
+
+        # Use finite differences (fast but unstable at high orders)
         F_vec = np.zeros(self.n_coeffs)
 
         for i, (m, n) in enumerate(self.indices):
@@ -378,11 +412,11 @@ class ElShowkCrossingVector:
         """
         Build F-vector using Taylor expansion (more stable for high orders).
 
-        Uses the approach from taylor_conformal_blocks.py adapted for
-        the El-Showk basis.
+        This method now uses analytical derivatives which are computed via
+        Taylor series expansion, making it equivalent to build_F_vector()
+        when use_analytical=True.
         """
-        # For now, fall back to numerical derivatives
-        # TODO: Implement proper Taylor expansion in (a,b) coordinates
+        # With analytical derivatives, this is the same as build_F_vector
         return self.build_F_vector(delta)
 
     def build_F_vector_spinning(self, delta: float, ell: int, n_max: int = 40) -> np.ndarray:
@@ -390,12 +424,12 @@ class ElShowkCrossingVector:
         Build F-vector for spinning operator with dimension delta and spin ell.
 
         For ℓ=0, delegates to build_F_vector().
-        For ℓ>0, uses the radial expansion from SpinningConformalBlock.
+        For ℓ>0, uses analytical derivatives when available.
 
         Args:
             delta: Operator scaling dimension
             ell: Operator spin (0, 2, 4, ...)
-            n_max: Maximum order in radial expansion
+            n_max: Maximum order in radial expansion (for fallback)
 
         Returns:
             F-vector of shape (n_coeffs,)
@@ -403,10 +437,14 @@ class ElShowkCrossingVector:
         if ell == 0:
             return self.build_F_vector(delta)
 
+        if self.use_analytical and self._analytical is not None:
+            # Use analytical derivatives for spinning blocks
+            return self._analytical.build_F_vector(delta, self.indices, ell=ell)
+
+        # Use finite differences (fast but unstable at high orders)
         F_vec = np.zeros(self.n_coeffs)
 
-        # For spinning operators, compute numerically using finite differences
-        # We need F(a,b) = v^{Δσ} g_{Δ,ℓ}(z,zbar) - u^{Δσ} g_{Δ,ℓ}(1-z,1-zbar)
+        # For spinning operators, compute numerically
         block = SpinningConformalBlock(delta, ell, n_max=n_max)
 
         for i, (m, n) in enumerate(self.indices):

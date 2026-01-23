@@ -191,7 +191,14 @@ error ≈ ε_machine / h^n ≈ 10^-16 / 0.02^20 ≈ 10^18
 
 This is **catastrophic cancellation**. The paper used **exact rational arithmetic** (via GMP/MPFR in SDPB) to avoid this entirely.
 
-**Status:** ❌ NOT SOLVED - requires rewriting derivative computation with arbitrary precision (mpmath) or analytical recursion relations.
+**Status:** ⚠️ PARTIALLY ADDRESSED - Added `analytical_derivatives.py` module with Richardson extrapolation
+which is more stable than simple finite differences. For highest precision at nmax=10+,
+full arbitrary precision (mpmath) or analytical recursion relations are still needed.
+
+The new implementation uses:
+- Richardson extrapolation (6 levels) instead of simple central differences
+- Hypergeometric series for conformal blocks instead of recursion
+- Automatic fallback: analytical for nmax≥5, finite diff for nmax<5
 
 ### 2. Missing Spinning Operators in Stage 1
 
