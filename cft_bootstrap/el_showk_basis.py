@@ -63,6 +63,160 @@ def count_coefficients(nmax: int) -> int:
     return len(get_derivative_indices(nmax))
 
 
+# ============================================================================
+# Multi-Resolution Discretization (T1-T5 Tables from El-Showk et al. 2012)
+# ============================================================================
+
+# Table specifications from the paper (Table 2, page 15)
+# Each table: (step_size, delta_max, spin_max)
+T1_T5_TABLES = {
+    'T1': {'step': 2e-5, 'delta_max': 3.0,  'spin_max': 0},     # Fine grid for scalars near gap
+    'T2': {'step': 5e-4, 'delta_max': 8.0,  'spin_max': 6},     # Medium grid
+    'T3': {'step': 2e-3, 'delta_max': 22.0, 'spin_max': 20},    # Coarser grid
+    'T4': {'step': 0.02, 'delta_max': 100.0, 'spin_max': 50},   # Coarse grid for high Δ
+    'T5': {'step': 1.0,  'delta_max': 500.0, 'spin_max': 100},  # Very coarse for far tail
+}
+
+
+def get_multiresolution_operators(
+    delta_gap: float,
+    unitarity_bound_func,
+    tables: Dict[str, Dict] = None,
+    verbose: bool = False
+) -> List[Tuple[float, int]]:
+    """
+    Generate operator list using multi-resolution T1-T5 discretization.
+
+    Uses progressively coarser grids at higher dimensions and spins,
+    matching the El-Showk et al. (2012) discretization strategy.
+
+    Args:
+        delta_gap: The gap Δε' (scalars above this dimension)
+        unitarity_bound_func: Function(spin) -> min_delta for that spin
+        tables: Custom table specs (default: T1-T5 from paper)
+        verbose: Print info about operator count
+
+    Returns:
+        List of (delta, spin) pairs for all operators to include
+    """
+    if tables is None:
+        tables = T1_T5_TABLES
+
+    operators = []
+    seen = set()  # Avoid duplicates
+
+    for table_name, spec in tables.items():
+        step = spec['step']
+        delta_max = spec['delta_max']
+        spin_max = spec['spin_max']
+
+        # For each spin in this table's range
+        for spin in range(0, spin_max + 1, 2):  # Even spins only
+            delta_min = unitarity_bound_func(spin)
+
+            # For scalars (spin=0), start from the gap
+            if spin == 0:
+                delta_min = max(delta_min, delta_gap)
+
+            # Sample operators from delta_min to delta_max with given step
+            n_samples = int((delta_max - delta_min) / step) + 1
+            if n_samples < 1:
+                continue
+
+            for i in range(n_samples):
+                delta = delta_min + i * step
+                if delta > delta_max:
+                    break
+
+                key = (round(delta, 6), spin)  # Avoid float precision issues
+                if key not in seen:
+                    seen.add(key)
+                    operators.append((delta, spin))
+
+    # Sort by (spin, delta) for organized processing
+    operators.sort(key=lambda x: (x[1], x[0]))
+
+    if verbose:
+        n_scalars = sum(1 for _, s in operators if s == 0)
+        n_spinning = len(operators) - n_scalars
+        max_spin_found = max(s for _, s in operators)
+        print(f"Multi-resolution discretization:")
+        print(f"  Total operators: {len(operators)}")
+        print(f"  Scalars (ℓ=0): {n_scalars}")
+        print(f"  Spinning (ℓ>0): {n_spinning}")
+        print(f"  Max spin: {max_spin_found}")
+
+    return operators
+
+
+def get_simplified_multiresolution(
+    delta_gap: float,
+    unitarity_bound_func,
+    max_spin: int = 50,
+    n_regions: int = 3,
+    verbose: bool = False
+) -> List[Tuple[float, int]]:
+    """
+    Simplified multi-resolution discretization (faster than full T1-T5).
+
+    Uses 3 resolution regions:
+    - Region 1: Fine grid near unitarity bound (step = 0.01)
+    - Region 2: Medium grid (step = 0.1)
+    - Region 3: Coarse grid for high Δ (step = 0.5)
+
+    Args:
+        delta_gap: The gap Δε'
+        unitarity_bound_func: Function(spin) -> min_delta
+        max_spin: Maximum spin to include
+        n_regions: Number of resolution regions (1-3)
+        verbose: Print info
+
+    Returns:
+        List of (delta, spin) pairs
+    """
+    operators = []
+    seen = set()
+
+    # Define regions
+    regions = [
+        {'step': 0.01, 'range': 3.0},   # Fine: unitarity to +3
+        {'step': 0.1,  'range': 10.0},  # Medium: +3 to +13
+        {'step': 0.5,  'range': 30.0},  # Coarse: +13 to +43
+    ][:n_regions]
+
+    for spin in range(0, max_spin + 1, 2):
+        delta_min = unitarity_bound_func(spin)
+
+        # For scalars, start from gap
+        if spin == 0:
+            delta_min = max(delta_min, delta_gap)
+
+        current_delta = delta_min
+
+        for region in regions:
+            step = region['step']
+            delta_end = current_delta + region['range']
+
+            while current_delta <= delta_end:
+                key = (round(current_delta, 4), spin)
+                if key not in seen:
+                    seen.add(key)
+                    operators.append((current_delta, spin))
+                current_delta += step
+
+    operators.sort(key=lambda x: (x[1], x[0]))
+
+    if verbose:
+        n_scalars = sum(1 for _, s in operators if s == 0)
+        n_spinning = len(operators) - n_scalars
+        print(f"Simplified multi-resolution:")
+        print(f"  Total operators: {len(operators)}")
+        print(f"  Scalars (ℓ=0): {n_scalars}")
+        print(f"  Spinning (ℓ>0): {n_spinning}")
+
+    return operators
+
+
 class ElShowkCrossingVector:
     """
     Compute F-vectors using El-Showk et al. (2012) conventions.
@@ -376,7 +530,8 @@ class ElShowkBootstrapSolver:
     def is_excluded(self, delta_sigma: float, delta_epsilon: float,
                     delta_epsilon_prime: float,
                     delta_max: float = 30.0, n_scalar_samples: int = 60,
-                    n_spin_samples: int = 30, include_spinning: bool = True) -> bool:
+                    n_spin_samples: int = 30, include_spinning: bool = True,
+                    use_multiresolution: bool = False) -> bool:
         """
         Check if point (Δσ, Δε, Δε') is excluded.
 
@@ -396,6 +551,7 @@ class ElShowkBootstrapSolver:
             n_scalar_samples: Number of scalar operators to sample above gap
             n_spin_samples: Number of spinning operators per spin
             include_spinning: Whether to include spinning operators (default True)
+            use_multiresolution: Use T1-T5 style multi-resolution discretization
         """
         try:
             import cvxpy as cp
@@ -417,21 +573,42 @@ class ElShowkBootstrapSolver:
         # Collect all F-vectors for operators
         all_F_ops = []
 
-        # 1. Scalar operators (ℓ=0) above the gap Δε'
-        scalar_deltas = np.linspace(delta_epsilon_prime, delta_max, n_scalar_samples)
-        for delta in scalar_deltas:
-            F = cross.build_F_vector(delta)
-            all_F_ops.append(F)
+        if use_multiresolution:
+            # Use T1-T5 style multi-resolution discretization
+            operators = get_simplified_multiresolution(
+                delta_gap=delta_epsilon_prime,
+                unitarity_bound_func=self.unitarity_bound,
+                max_spin=self.max_spin if include_spinning else 0,
+                n_regions=3,
+                verbose=False
+            )
 
-        # 2. Spinning operators (ℓ = 2, 4, 6, ..., max_spin)
-        if include_spinning and self.max_spin >= 2:
-            for ell in range(2, self.max_spin + 1, 2):
-                delta_min = self.unitarity_bound(ell)
-                # More samples near unitarity bound, fewer at high Δ
-                spin_deltas = np.linspace(delta_min, delta_max, n_spin_samples)
-                for delta in spin_deltas:
-                    F = cross.build_F_vector_spinning(delta, ell)
-                    all_F_ops.append(F)
+            for delta, spin in operators:
+                if spin == 0:
+                    F = cross.build_F_vector(delta)
+                else:
+                    F = cross.build_F_vector_spinning(delta, spin)
+                all_F_ops.append(F)
+        else:
+            # Original uniform sampling
+            # 1. Scalar operators (ℓ=0) above the gap Δε'
+            scalar_deltas = np.linspace(delta_epsilon_prime, delta_max, n_scalar_samples)
+            for delta in scalar_deltas:
+                F = cross.build_F_vector(delta)
+                all_F_ops.append(F)
+
+            # 2. Spinning operators (ℓ = 2, 4, 6, ..., max_spin)
+            if include_spinning and self.max_spin >= 2:
+                for ell in range(2, self.max_spin + 1, 2):
+                    delta_min = self.unitarity_bound(ell)
+                    spin_deltas = np.linspace(delta_min, delta_max, n_spin_samples)
+                    for delta in spin_deltas:
+                        F = cross.build_F_vector_spinning(delta, ell)
+                        all_F_ops.append(F)
+
+        if len(all_F_ops) == 0:
+            warnings.warn("No operators to check")
+            return False
 
         F_ops = np.array(all_F_ops)
 
@@ -471,6 +648,7 @@ class ElShowkBootstrapSolver:
         delta_prime_max: float = 6.0,
         tolerance: float = 0.02,
         include_spinning: bool = True,
+        use_multiresolution: bool = False,
         verbose: bool = False
     ) -> float:
         """
@@ -483,6 +661,7 @@ class ElShowkBootstrapSolver:
             delta_prime_max: Maximum gap to search
             tolerance: Search tolerance
             include_spinning: Whether to include spinning operators
+            use_multiresolution: Use T1-T5 style multi-resolution discretization
             verbose: Print progress
         """
         if delta_prime_min is None:
@@ -494,18 +673,22 @@ class ElShowkBootstrapSolver:
             print(f"Searching for Δε' bound at Δσ={delta_sigma:.4f}, Δε={delta_epsilon:.4f}")
             print(f"  Range: [{delta_prime_min:.2f}, {delta_prime_max:.2f}]")
             print(f"  Including spinning operators: {include_spinning}")
+            print(f"  Multi-resolution discretization: {use_multiresolution}")
 
-        if self.is_excluded(delta_sigma, delta_epsilon, delta_prime_min, include_spinning=include_spinning):
+        if self.is_excluded(delta_sigma, delta_epsilon, delta_prime_min,
+                           include_spinning=include_spinning, use_multiresolution=use_multiresolution):
             return delta_prime_min
 
-        if not self.is_excluded(delta_sigma, delta_epsilon, delta_prime_max, include_spinning=include_spinning):
+        if not self.is_excluded(delta_sigma, delta_epsilon, delta_prime_max,
+                               include_spinning=include_spinning, use_multiresolution=use_multiresolution):
             return float('inf')
 
         lo, hi = delta_prime_min, delta_prime_max
         iterations = 0
         while hi - lo > tolerance:
             mid = (lo + hi) / 2
-            if self.is_excluded(delta_sigma, delta_epsilon, mid, include_spinning=include_spinning):
+            if self.is_excluded(delta_sigma, delta_epsilon, mid,
+                               include_spinning=include_spinning, use_multiresolution=use_multiresolution):
                 hi = mid
             else:
                 lo = mid
@@ -604,9 +787,68 @@ def test_spinning_operators():
     print("\n" + "=" * 60)
 
 
+def test_multiresolution():
+    """Test multi-resolution discretization."""
+    print("\nTesting multi-resolution discretization (T1-T5 style)")
+    print("=" * 60)
+
+    # Define unitarity bound function for 3D
+    def unitarity_bound(ell):
+        if ell == 0:
+            return 0.5
+        return ell + 1
+
+    # Test the simplified multi-resolution
+    print("\n1. Simplified multi-resolution (faster):")
+    operators = get_simplified_multiresolution(
+        delta_gap=1.51,  # Gap above Δε
+        unitarity_bound_func=unitarity_bound,
+        max_spin=10,
+        n_regions=3,
+        verbose=True
+    )
+
+    print(f"\n  Sample operators:")
+    print(f"  First 5 scalars: {[(d, s) for d, s in operators if s == 0][:5]}")
+    print(f"  First 5 spin-2:  {[(d, s) for d, s in operators if s == 2][:5]}")
+    print(f"  First 5 spin-4:  {[(d, s) for d, s in operators if s == 4][:5]}")
+
+    # Test full T1-T5 discretization
+    print("\n2. Full T1-T5 discretization (paper style):")
+    operators_full = get_multiresolution_operators(
+        delta_gap=1.51,
+        unitarity_bound_func=unitarity_bound,
+        verbose=True
+    )
+
+    # Test solver with multi-resolution
+    print("\n3. Solver test with multi-resolution:")
+    solver = ElShowkBootstrapSolver(d=3, nmax=3, max_spin=6)
+
+    delta_sigma = 0.518
+    delta_epsilon = 1.41
+
+    for gap in [2.5, 3.0]:
+        excluded_uniform = solver.is_excluded(
+            delta_sigma, delta_epsilon, gap,
+            n_scalar_samples=30, n_spin_samples=10,
+            include_spinning=True, use_multiresolution=False
+        )
+        excluded_multi = solver.is_excluded(
+            delta_sigma, delta_epsilon, gap,
+            include_spinning=True, use_multiresolution=True
+        )
+        print(f"  Δε' = {gap}: uniform={'EXCL' if excluded_uniform else 'ALLOW'}, "
+              f"multiresolution={'EXCL' if excluded_multi else 'ALLOW'}")
+
+    print("\n" + "=" * 60)
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--spinning":
         test_spinning_operators()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--multiresolution":
+        test_multiresolution()
     else:
         test_el_showk_basis()

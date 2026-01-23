@@ -401,7 +401,7 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 | **2** | **Implement two-stage pipeline** | CRITICAL - may fix gap | ✅ Done |
 | **3** | **Add spinning operators (Lmax≥50)** | HIGH | ✅ Done |
 | **4** | **Implement (a,b) derivative basis with nmax=10** | HIGH | ✅ Done |
-| **5** | **Multi-resolution discretization (T1-T5)** | MEDIUM | ⬜ |
+| **5** | **Multi-resolution discretization (T1-T5)** | MEDIUM | ✅ Done |
 | 6 | Install SDPB for smooth curves | LOW | ⬜ |
 
 ### Minimal Checklist for Fig. 6 Reproduction
@@ -411,7 +411,7 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 - [x] Implement (a,b) coordinate derivatives at (a=0, b=0) with mixed derivatives
 - [x] Increase to nmax=10 (66 coefficients) via ElShowkBootstrapSolver
 - [x] Add spinning operators l = 0, 2, 4, ..., Lmax ≥ 50 (via ElShowkBootstrapSolver)
-- [ ] Implement T1-T5 multi-resolution discretization
+- [x] Implement T1-T5 multi-resolution discretization (via get_multiresolution_operators)
 - [ ] Match LP tolerances to serious solver
 
 See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
