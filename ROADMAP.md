@@ -324,6 +324,8 @@ Implemented the pycftboot-style reshuffling normalization across all solvers:
 - [x] **Investigation of ~1.3 unit gap** (January 2026)
 - [x] **Environment check script** (`cft_bootstrap/check_env.py`)
 - [x] **pycftboot-style reshuffling normalization** (January 2026) - doesn't fix gap
+- [x] **Missing normalization constraint fix** (January 2026) - added `α_reduced · F_id_reduced = 0`
+- [x] **Stage 1 spinning operators** (January 2026) - Stage 1 now uses `ElShowkBootstrapSolver`
 
 ### In Progress 🔄
 - [ ] Compare with reference implementations to identify formulation differences
@@ -416,6 +418,24 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 
 See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
 
+### January 2026 Update: Stage 1 Spinning Operators
+
+**Problem Identified:** Stage 1 (finding the Δε boundary) was using scalar-only solver (`BootstrapSolver`), while Stage 2 had full spinning operators via `ElShowkBootstrapSolver`. This inconsistency meant Stage 1 was computing a weaker bound than intended.
+
+**Solution:** Modified Stage 1 to use `ElShowkBootstrapSolver` with the same spinning operator support as Stage 2.
+
+**Files Modified:**
+- `el_showk_basis.py`: Added `is_point_excluded()` and `find_delta_epsilon_bound()` methods to `ElShowkBootstrapSolver`
+- `run_bootstrap.py`: Stage 1 now uses `ElShowkBootstrapSolver` with spinning operators
+- `bootstrap_gap_solver.py`: `compute_two_stage_scan()` now uses `ElShowkBootstrapSolver` for Stage 1 with configurable spinning
+
+**New Parameters:**
+- `use_spinning_stage1`: Boolean to enable spinning operators in Stage 1 (default: True)
+
+**Impact:** Stage 1 now produces tighter Δε boundaries by including spinning operator constraints, which may improve the final Δε' bounds.
+
+---
+
 ### January 2026 Update: CLI and Cluster Integration
 
 | Feature | Status | Notes |
@@ -424,6 +444,7 @@ See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance
 | SBATCH script for El-Showk | ✅ Done | Full configuration with resource guidelines |
 | ElShowkPolynomialApproximator | ✅ Done | SDPB integration for El-Showk basis |
 | `--method el-showk-sdpb` | ✅ Done | High-precision SDPB with El-Showk |
+| Stage 1 spinning operators | ✅ Done | Stage 1 now uses `ElShowkBootstrapSolver` with spinning |
 | Documentation | ✅ Done | README.md cluster instructions |
 
 **Usage:**

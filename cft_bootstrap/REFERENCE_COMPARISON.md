@@ -370,6 +370,49 @@ To reproduce the reference Δε' curve (paper Figure 6), we need:
 
 ---
 
+## Progress Update (Session 3 - January 2026)
+
+### Bug Found and Fixed: Stage 1 Missing Spinning Operators ✅
+
+**Problem:** Stage 1 (finding the Δε boundary) was using `BootstrapSolver` (scalars only), while Stage 2 used `ElShowkBootstrapSolver` (includes spinning operators). This inconsistency meant Stage 1 was computing a weaker bound.
+
+**Files Modified:**
+- `el_showk_basis.py`: Added `is_point_excluded()` and `find_delta_epsilon_bound()` methods
+- `run_bootstrap.py`: Stage 1 now uses `ElShowkBootstrapSolver`
+- `bootstrap_gap_solver.py`: `compute_two_stage_scan()` now supports spinning operators in Stage 1
+
+**New Methods in `ElShowkBootstrapSolver`:**
+```python
+# Check if point (Δσ, gap) is excluded (Stage 1 problem)
+def is_point_excluded(self, delta_sigma, delta_gap, include_spinning=True, ...):
+    """For Stage 1: All scalars with Δ ≥ gap contribute."""
+    pass
+
+# Find Δε boundary via binary search
+def find_delta_epsilon_bound(self, delta_sigma, delta_min=0.5, delta_max=3.0,
+                            tolerance=0.02, include_spinning=True, ...):
+    """Stage 1 of two-stage protocol."""
+    pass
+```
+
+**New Parameter in `compute_two_stage_scan()`:**
+- `use_spinning_stage1`: Boolean to enable spinning operators in Stage 1 (default: True)
+
+### Current Status After All Fixes
+
+With all fixes applied (normalization constraint + Stage 1 spinning):
+- Stage 1 now uses the same ElShowkBootstrapSolver as Stage 2
+- Both stages have spinning operators, multi-resolution discretization
+- ~1.3 unit gap to reference still persists
+
+### Remaining Investigation Priorities
+
+1. **Compare F-vector values numerically** with pycftboot output
+2. **Check objective function** - are we minimizing the right thing?
+3. **Test with SDPB** - install via Docker and compare
+
+---
+
 ## Contact
 
 If you find the discrepancy, please update:

@@ -738,7 +738,16 @@ class ElShowkBootstrapSolver:
         # Solve SDP with high-precision tolerances
         alpha = cp.Variable(self.n_constraints - 1)
 
-        constraints = [alpha @ F_eps_reduced >= -fixed_eps]
+        # CRITICAL: F_id_reduced must satisfy alpha @ F_id_reduced = 0
+        # to correctly enforce the normalization constraint alpha @ F_id = 1
+        F_id_reduced = np.delete(F_id, max_idx)
+
+        constraints = [
+            # Normalization constraint: alpha @ F_id_reduced = 0
+            alpha @ F_id_reduced == 0,
+            # First scalar positivity
+            alpha @ F_eps_reduced >= -fixed_eps
+        ]
         for i, F_O in enumerate(F_ops_reduced):
             constraints.append(alpha @ F_O >= -fixed_ops[i])
 
@@ -760,6 +769,198 @@ class ElShowkBootstrapSolver:
 
         # All solvers failed or returned unclear status
         return False
+
+    def is_point_excluded(self, delta_sigma: float, delta_gap: float,
+                          delta_max: float = 30.0, n_scalar_samples: int = 60,
+                          n_spin_samples: int = 30, include_spinning: bool = True,
+                          use_multiresolution: bool = False) -> bool:
+        """
+        Check if point (Δσ, gap) is excluded for Stage 1 (Δε boundary).
+
+        This is for finding the Δε boundary WITHOUT a separate ε operator.
+        All scalars with Δ ≥ gap contribute to the crossing equation.
+
+        Unlike is_excluded() which handles the gap bound (with separate ε),
+        this method handles the simpler single-gap problem for Stage 1.
+
+        Args:
+            delta_sigma: External scalar dimension
+            delta_gap: Gap for scalars (all scalars have Δ ≥ gap)
+            delta_max: Maximum dimension to sample
+            n_scalar_samples: Number of scalar operators to sample
+            n_spin_samples: Number of spinning operators per spin
+            include_spinning: Whether to include spinning operators
+            use_multiresolution: Use T1-T5 style multi-resolution discretization
+        """
+        try:
+            import cvxpy as cp
+        except ImportError:
+            warnings.warn("CVXPY not installed")
+            return False
+
+        try:
+            from .bootstrap_gap_solver import reshuffle_with_normalization
+        except ImportError:
+            from bootstrap_gap_solver import reshuffle_with_normalization
+
+        cross = ElShowkCrossingVector(
+            delta_sigma, self.nmax,
+            high_precision=self.high_precision,
+            precision=self.precision
+        )
+
+        # Build F-vectors
+        F_id = cross.build_F_vector(0)  # Identity
+
+        # Collect all F-vectors for operators above the gap
+        all_F_ops = []
+
+        if use_multiresolution:
+            operators = get_simplified_multiresolution(
+                delta_gap=delta_gap,
+                unitarity_bound_func=self.unitarity_bound,
+                max_spin=self.max_spin if include_spinning else 0,
+                n_regions=3,
+                verbose=False
+            )
+
+            for delta, spin in operators:
+                if spin == 0:
+                    F = cross.build_F_vector(delta)
+                else:
+                    F = cross.build_F_vector_spinning(delta, spin)
+                all_F_ops.append(F)
+        else:
+            # Scalar operators above the gap
+            scalar_deltas = np.linspace(delta_gap, delta_max, n_scalar_samples)
+            for delta in scalar_deltas:
+                F = cross.build_F_vector(delta)
+                all_F_ops.append(F)
+
+            # Spinning operators
+            if include_spinning and self.max_spin >= 2:
+                for ell in range(2, self.max_spin + 1, 2):
+                    delta_min = self.unitarity_bound(ell)
+                    spin_deltas = np.linspace(delta_min, delta_max, n_spin_samples)
+                    for delta in spin_deltas:
+                        F = cross.build_F_vector_spinning(delta, ell)
+                        all_F_ops.append(F)
+
+        if len(all_F_ops) == 0:
+            warnings.warn("No operators to check")
+            return False
+
+        F_ops = np.array(all_F_ops)
+
+        # Solve SDP: find α such that α·F_id = 1 and α·F_O ≥ 0 for all O
+        alpha = cp.Variable(self.n_constraints)
+
+        # CRITICAL: Use proper normalization constraint
+        max_idx = np.argmax(np.abs(F_id))
+        F_id_reduced = np.delete(F_id, max_idx)
+
+        # Reshuffling transformation
+        const_ops = F_ops[:, max_idx] / F_id[max_idx]
+        F_ops_transformed = F_ops - np.outer(const_ops, F_id)
+        F_ops_reduced = np.delete(F_ops_transformed, max_idx, axis=1)
+
+        alpha_reduced = cp.Variable(self.n_constraints - 1)
+
+        constraints = [
+            # Normalization: α_reduced · F_id_reduced = 0
+            alpha_reduced @ F_id_reduced == 0,
+        ]
+        for i, F_O in enumerate(F_ops_reduced):
+            constraints.append(alpha_reduced @ F_O >= -const_ops[i])
+
+        prob = cp.Problem(cp.Minimize(0), constraints)
+
+        # Try solvers
+        solvers_to_try = self._get_solvers_to_try()
+
+        for solver_name, solver_cp, options in solvers_to_try:
+            try:
+                prob.solve(solver=solver_cp, **options)
+                if prob.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+                    return True  # EXCLUDED
+                elif prob.status == cp.INFEASIBLE:
+                    return False  # ALLOWED
+            except Exception:
+                continue
+
+        return False
+
+    def find_delta_epsilon_bound(
+        self,
+        delta_sigma: float,
+        delta_min: float = 0.5,
+        delta_max: float = 3.0,
+        tolerance: float = 0.02,
+        include_spinning: bool = True,
+        use_multiresolution: bool = False,
+        verbose: bool = False
+    ) -> float:
+        """
+        Find the upper bound on Δε (Stage 1 of two-stage protocol).
+
+        Uses binary search with the El-Showk derivative basis and
+        optionally spinning operators.
+
+        Args:
+            delta_sigma: External scalar dimension
+            delta_min: Minimum Δε to search
+            delta_max: Maximum Δε to search
+            tolerance: Search tolerance
+            include_spinning: Whether to include spinning operators
+            use_multiresolution: Use T1-T5 style discretization
+            verbose: Print progress
+
+        Returns:
+            Upper bound on Δε
+        """
+        if verbose:
+            print(f"Finding Δε bound at Δσ={delta_sigma:.4f}")
+            print(f"  Range: [{delta_min:.2f}, {delta_max:.2f}]")
+            print(f"  Including spinning: {include_spinning}")
+            print(f"  nmax={self.nmax} ({self.n_constraints} constraints)")
+
+        # Check boundary conditions
+        if not self.is_point_excluded(delta_sigma, delta_min,
+                                      include_spinning=include_spinning,
+                                      use_multiresolution=use_multiresolution):
+            if verbose:
+                print(f"  Lower bound {delta_min} is ALLOWED")
+            # Point is allowed even at minimum - return minimum
+            return delta_min
+
+        if self.is_point_excluded(delta_sigma, delta_max,
+                                  include_spinning=include_spinning,
+                                  use_multiresolution=use_multiresolution):
+            if verbose:
+                print(f"  Upper bound {delta_max} is EXCLUDED")
+            return float('inf')
+
+        # Binary search
+        lo, hi = delta_min, delta_max
+        iterations = 0
+        while hi - lo > tolerance:
+            mid = (lo + hi) / 2
+            excluded = self.is_point_excluded(delta_sigma, mid,
+                                              include_spinning=include_spinning,
+                                              use_multiresolution=use_multiresolution)
+            if excluded:
+                lo = mid
+            else:
+                hi = mid
+            iterations += 1
+            if verbose and iterations % 5 == 0:
+                print(f"  Iteration {iterations}: [{lo:.3f}, {hi:.3f}]")
+
+        bound = (lo + hi) / 2
+        if verbose:
+            print(f"  Found bound: Δε ≤ {bound:.4f}")
+
+        return bound
 
     def _get_solvers_to_try(self):
         """Get list of (name, cvxpy_solver, options) to try."""

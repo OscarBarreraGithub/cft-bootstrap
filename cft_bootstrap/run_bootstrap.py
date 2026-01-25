@@ -474,16 +474,30 @@ def run_array_job(job_index: int, n_jobs: int, sigma_min: float, sigma_max: floa
         print(f"Computing Figure 6 style Δε' bound (two-stage)")
         print("=" * 60)
 
-        # Stage 1: Find Δε boundary using basic bootstrap solver
-        # (This is the single-correlator bound, same method for all)
-        print("\n--- Stage 1: Finding Δε boundary ---")
+        # Stage 1: Find Δε boundary using El-Showk solver with spinning operators
+        # This is the single-correlator bound on Δε, now with proper spinning!
+        print("\n--- Stage 1: Finding Δε boundary (with spinning operators) ---")
         t0 = time.time()
 
-        # Use BootstrapSolver for Stage 1 (finding the Δε boundary)
-        # This is the upper bound on Δε from single-correlator crossing
-        basic_solver = BootstrapSolver(d=3, max_deriv=max_deriv)
-        delta_epsilon = basic_solver.find_bound(
-            delta_sigma, method='lp', tolerance=tolerance
+        # Use ElShowkBootstrapSolver for Stage 1 (includes spinning operators)
+        # This gives a more accurate Δε boundary
+        stage1_nmax = nmax if nmax is not None else max_deriv // 2
+        stage1_solver = ElShowkBootstrapSolver(
+            d=3,
+            nmax=stage1_nmax,
+            max_spin=max_spin,
+            solver=el_showk_solver,
+            high_precision=high_precision,
+            precision=precision
+        )
+        delta_epsilon = stage1_solver.find_delta_epsilon_bound(
+            delta_sigma,
+            delta_min=0.5,
+            delta_max=3.0,
+            tolerance=tolerance,
+            include_spinning=(max_spin > 0),
+            use_multiresolution=use_multiresolution,
+            verbose=True
         )
         print(f"  Found Δε boundary: {delta_epsilon:.6f}")
 

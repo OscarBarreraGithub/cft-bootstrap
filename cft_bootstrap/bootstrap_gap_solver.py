@@ -231,8 +231,15 @@ class GapBootstrapSolver:
         # Reduced alpha has n_constraints - 1 components
         alpha_reduced = cp.Variable(self.n_constraints - 1)
 
+        # CRITICAL: F_id_reduced must satisfy alpha_reduced @ F_id_reduced = 0
+        # to correctly enforce the normalization constraint alpha @ F_id = 1
+        F_id_reduced = np.delete(F_id, max_idx)
+
         # Build constraints with the fixed contribution moved to RHS
         constraints = [
+            # Normalization constraint: alpha_reduced @ F_id_reduced = 0
+            alpha_reduced @ F_id_reduced == 0,
+            # First scalar positivity
             alpha_reduced @ F_eps_reduced >= -fixed_eps,
         ]
 
@@ -505,6 +512,9 @@ class DeltaEpsilonPrimeBoundComputer:
         tolerance_stage2: float = 0.02,
         max_deriv_stage1: int = None,
         max_deriv_stage2: int = None,
+        max_spin: int = 20,
+        use_spinning_stage1: bool = True,
+        use_multiresolution: bool = False,
         verbose: bool = True
     ) -> np.ndarray:
         """
@@ -524,15 +534,19 @@ class DeltaEpsilonPrimeBoundComputer:
             tolerance_stage2: Binary search tolerance for Δε' bound
             max_deriv_stage1: Max derivative order for Stage 1 (default: same as self)
             max_deriv_stage2: Max derivative order for Stage 2 (default: same as self)
+            max_spin: Maximum spin to include (default 20)
+            use_spinning_stage1: Whether to include spinning operators in Stage 1
+            use_multiresolution: Use T1-T5 style multi-resolution discretization
             verbose: Print progress
 
         Returns:
             Array of shape (N, 3) with [Δσ, Δε_max, Δε'_bound]
         """
+        # Import ElShowkBootstrapSolver for Stage 1 with spinning operators
         try:
-            from .bootstrap_solver import BootstrapSolver
+            from .el_showk_basis import ElShowkBootstrapSolver
         except ImportError:
-            from bootstrap_solver import BootstrapSolver
+            from el_showk_basis import ElShowkBootstrapSolver
 
         # Default to same max_deriv for both stages if not specified
         if max_deriv_stage1 is None:
@@ -549,13 +563,21 @@ class DeltaEpsilonPrimeBoundComputer:
             print("=" * 60)
             print(f"Δσ range: [{delta_sigma_min}, {delta_sigma_max}]")
             print(f"Points: {n_points}")
-            print(f"Stage 1 (Δε boundary): {(max_deriv_stage1 + 1) // 2} constraints")
+            print(f"Stage 1 (Δε boundary): nmax={max_deriv_stage1 // 2} with spinning={use_spinning_stage1}")
             print(f"Stage 2 (Δε' bound): {(max_deriv_stage2 + 1) // 2} constraints")
+            print(f"Max spin: {max_spin}")
+            print(f"Multi-resolution discretization: {use_multiresolution}")
             print(f"Solver: {'SDP (CVXPY)' if HAS_CVXPY else 'LP (scipy)'}")
             print("=" * 60)
 
-        # Create Stage 1 solver (for Δε boundary)
-        stage1_solver = BootstrapSolver(d=3, max_deriv=max_deriv_stage1)
+        # Create Stage 1 solver with spinning operators (ElShowkBootstrapSolver)
+        stage1_solver = ElShowkBootstrapSolver(
+            d=3,
+            nmax=max_deriv_stage1 // 2,
+            max_spin=max_spin if use_spinning_stage1 else 0,
+            solver='auto',
+            high_precision=False
+        )
 
         # Create Stage 2 solver (for Δε' bound)
         stage2_solver = GapBootstrapSolver(d=3, max_deriv=max_deriv_stage2)
@@ -565,14 +587,16 @@ class DeltaEpsilonPrimeBoundComputer:
                 print(f"\n[{i+1}/{n_points}] Δσ = {ds:.4f}")
                 print("-" * 40)
 
-            # Stage 1: Compute Δε boundary
+            # Stage 1: Compute Δε boundary with spinning operators
             if verbose:
-                print(f"  Stage 1: Computing Δε boundary... ", end='', flush=True)
+                print(f"  Stage 1: Computing Δε boundary (with spinning)... ", end='', flush=True)
 
-            method = 'sdp' if HAS_CVXPY else 'lp'
-            delta_eps_max = stage1_solver.find_bound(
+            delta_eps_max = stage1_solver.find_delta_epsilon_bound(
                 ds, delta_min=0.5, delta_max=3.0,
-                tolerance=tolerance_stage1, method=method
+                tolerance=tolerance_stage1,
+                include_spinning=use_spinning_stage1,
+                use_multiresolution=use_multiresolution,
+                verbose=False
             )
 
             if verbose:
