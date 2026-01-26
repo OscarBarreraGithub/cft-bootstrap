@@ -6,5 +6,9 @@ matplotlib>=3.4
 # Optional: for SDP solver (stronger bounds)
 cvxpy>=1.2
 
+# Required for polynomial matrix programs (accurate bounds)
+symengine>=0.9.0  # Symbolic computation with MPFR support
+mpmath>=1.2.0     # Arbitrary precision arithmetic
+
 # Optional: for parallel execution
 # mpi4py>=3.0  # Uncomment if using MPI
