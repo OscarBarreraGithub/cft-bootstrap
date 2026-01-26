@@ -18,7 +18,7 @@
 
 ## Implementation Progress
 
-### Completed (Phase 1)
+### Completed (Phase 1-2)
 
 | Task | Status | Files |
 |------|--------|-------|
@@ -30,16 +30,16 @@
 | Implement Laguerre sample points | ✅ Done | [polynomial_bootstrap.py](polynomial_bootstrap.py) |
 | Implement `PMPGenerator` for SDPB JSON output | ✅ Done | [polynomial_bootstrap.py](polynomial_bootstrap.py) |
 | Create validation test suite | ✅ Done | [tests/test_polynomial_bootstrap.py](tests/test_polynomial_bootstrap.py) |
+| Install symengine with MPFR | ✅ Done | `pip install symengine` |
+| Create pycftboot bridge | ✅ Done | [pycftboot_bridge.py](pycftboot_bridge.py) |
 
-**All 15 tests pass.**
+**All tests pass. pycftboot bridge successfully builds symbolic block tables with 200+ digit precision.**
 
-### Remaining Work (Phase 2-3)
+### Remaining Work (Phase 3)
 
 | Task | Status | Priority | Notes |
 |------|--------|----------|-------|
-| Install symengine with MPFR | 🔲 Pending | High | Required for symbolic polynomials |
-| Port Zamolodchikov recursion | 🔲 Pending | High | Complex - consider importing pycftboot directly |
-| Update `sdpb_interface.py` | 🔲 Pending | Medium | Connect polynomial infrastructure |
+| Update `sdpb_interface.py` | 🔄 In Progress | Medium | Connect polynomial infrastructure |
 | Test Ising point bound | 🔲 Pending | High | Key validation: should get ~3.8 not 2.6 |
 | Full Figure 6 reproduction | 🔲 Pending | Final | End goal |
 
