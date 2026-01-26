@@ -38,8 +38,7 @@ from scipy.linalg import cholesky, solve_triangular
 try:
     from symengine import (
         Symbol, Integer, Rational, sqrt, log, exp, pi,
-        expand, diff, factorial as sym_factorial,
-        DenseMatrix, RealMPFR, symbols
+        expand, diff, DenseMatrix, RealMPFR, symbols
     )
     from symengine.lib.symengine_wrapper import have_mpfr
     HAVE_SYMENGINE = True
