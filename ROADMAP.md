@@ -418,6 +418,112 @@ Ours: **CVXPY/SCS** → different numerics, but shouldn't cause 1+ unit gap
 
 See `cft_bootstrap/REFERENCE_COMPARISON.md` for detailed implementation guidance.
 
+### January 2026 Update: Deep Investigation into the ~1.2 Unit Gap
+
+A thorough investigation was conducted to understand why all implementations consistently produce bounds ~1.2 units below the reference value (~2.6 vs ~3.8 at the Ising point).
+
+#### 1. F-Vector Verification ✅ CORRECT
+
+F-vectors were computed in Mathematica and compared with our implementation:
+
+**Mathematica (El-Showk coordinates at a=0.5, b=0):**
+```
+F_identity derivatives (m=1,3,5): [-2.0209, 0.2812, 6.6016]
+F_epsilon derivatives (m=1,3,5):  [0.9283, -1.8538, -42.717]
+```
+
+**Our implementation:**
+```
+F_identity: [-1.0105, 0.00585, 0.00171]
+F_epsilon:  [0.4642, -0.03855, -0.01099]
+```
+
+**Relationship:** Our code uses the normalization convention:
+```
+Our_F[m] = ElShowk_F[m] / (2^m * m!)
+```
+
+This is a **consistent convention** that doesn't affect bootstrap bounds. The ratio `F_epsilon/F_identity` matches exactly between implementations, confirming correctness.
+
+#### 2. All Solvers Give the Same Gap
+
+Tested multiple solver approaches at the Ising point (Δσ=0.518, Δε=1.41):
+
+| Solver | Approach | Bound | Gap to Reference |
+|--------|----------|-------|------------------|
+| Basic SDP | Discrete sampling | ~2.5 | ~1.3 |
+| Polynomial Positivity | Continuous (SOS) | ~2.63 | ~1.2 |
+| El-Showk Solver | Full basis + spinning | ~2.5 | ~1.3 |
+
+**Conclusion:** The gap is NOT due to discrete vs continuous positivity or missing spinning operators.
+
+#### 3. Key Discrepancy Point Confirmed
+
+At Ising point with Δε'=3.0:
+- **Our solver:** EXCLUDED (point ruled out)
+- **Reference:** Should be ALLOWED (bound is ~3.8)
+
+This confirms the ~1.2 unit discrepancy is real and consistent.
+
+#### 4. Numerical Issues Identified
+
+The SDP solver finds solutions with extremely large α values:
+```python
+SCS:  alpha_reduced = [-17692825, 61367342, -1498097]
+OSQP: alpha_reduced = [-11637155, 40380292, -1021402]
+```
+
+These ~10^7 magnitude values indicate:
+- **Poorly conditioned problem** - near-singular constraint matrix
+- **Nearly unconstrained search space** - F_id dominated by first component
+- The normalization constraint `α·F_id = 1` effectively only constrains `α[0] ≈ -1/F_id[0]`
+- Higher components `α[1], α[2], ...` are nearly free to take any value
+
+#### 5. Root Cause: Problem Formulation Difference
+
+The gap is **NOT** due to:
+- ❌ F-vector computation (verified correct)
+- ❌ Discrete vs continuous positivity (both give same gap)
+- ❌ Missing spinning operators (El-Showk solver includes them)
+- ❌ Numerical precision (tested multiple solvers)
+- ❌ Number of constraints (tested 3-31, gap persists)
+
+The gap **IS** due to:
+- **Fundamentally different problem formulation** than pycftboot/SDPB
+- Our formulation is "too easy" - finds excluding functionals that shouldn't exist
+- pycftboot uses **polynomial matrix programs** (PMPs) where F-vectors are polynomials in Δ
+- pycftboot uses **damped rational prefactors** and **bilinear bases** for numerical stability
+
+#### 6. pycftboot Structure Analysis
+
+From examining `pycftboot/bootstrap.py`:
+
+```python
+# iterate() method - the core SDP call
+obj = [0.0] * len(self.table[0][0][0].vector)  # Zero objective
+self.write_xml(obj, self.unit, name)           # unit = identity contribution
+```
+
+Key structural differences:
+1. **Polynomial vectors** - F-vectors are polynomials in δ (scaling dimension), not fixed numerical arrays
+2. **Bilinear basis** - orthogonal polynomial basis for each spin channel
+3. **Sample points & scalings** - Laguerre-based sample points with damped rational prefactors
+4. **XML/PMP format** - specialized format for SDPB, not generic LP/SDP
+
+Our discrete operator sampling approach creates a fundamentally different optimization problem.
+
+#### 7. Next Steps to Resolve
+
+1. **Install symengine + pycftboot** and run at Ising point to see exact constraint structure
+2. **Install SDPB via Docker** and generate reference PMP files
+3. **Compare constraint matrices** side-by-side at a single point
+4. **Check for missing components:**
+   - Stress tensor contribution (Δ=3, spin=2)
+   - Ward identity constraints
+   - OPE coefficient normalization (λ² positivity)
+
+---
+
 ### January 2026 Update: Stage 1 Spinning Operators
 
 **Problem Identified:** Stage 1 (finding the Δε boundary) was using scalar-only solver (`BootstrapSolver`), while Stage 2 had full spinning operators via `ElShowkBootstrapSolver`. This inconsistency meant Stage 1 was computing a weaker bound than intended.

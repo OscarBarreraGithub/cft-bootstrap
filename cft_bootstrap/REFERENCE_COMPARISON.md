@@ -413,6 +413,93 @@ With all fixes applied (normalization constraint + Stage 1 spinning):
 
 ---
 
+## January 2026 Deep Investigation Results
+
+### F-Vector Comparison with Mathematica ✅ VERIFIED CORRECT
+
+Computed F-vectors directly in Mathematica at the crossing-symmetric point:
+
+**Mathematica (El-Showk coordinates):**
+```
+F_identity derivatives (m=1,3,5): [-2.0209, 0.2812, 6.6016]
+F_epsilon derivatives (m=1,3,5):  [0.9283, -1.8538, -42.717]
+```
+
+**Our implementation:**
+```
+F_identity: [-1.0105, 0.00585, 0.00171]
+F_epsilon:  [0.4642, -0.03855, -0.01099]
+```
+
+**Verified relationship:**
+```
+Our_F[m] = ElShowk_F[m] / (2^m * m!)
+```
+
+This is due to:
+1. Different coordinate systems (ours: `z = 0.5 + (a+b)/2`, El-Showk: `z = a + sqrt(b)`)
+2. Our code divides by `m!` in `build_F_vector()`
+
+The ratio `F_epsilon[i] / F_identity[i]` matches exactly between implementations, confirming our F-vectors are correct.
+
+### All Solvers Tested - Same Gap
+
+| Solver | Method | Bound at Ising | Gap |
+|--------|--------|----------------|-----|
+| GapBootstrapSolver | Discrete SDP | ~2.5 | ~1.3 |
+| PolynomialPositivityGapSolver | Continuous SOS | ~2.63 | ~1.2 |
+| ElShowkBootstrapSolver | Full basis + spinning | ~2.5 | ~1.3 |
+
+**Conclusion:** The gap is consistent across all solver implementations.
+
+### Numerical Analysis of SDP Solutions
+
+The SDP solver finds "valid" solutions with enormous α values:
+```
+SCS solver:  α_reduced = [-1.77e7, 6.14e7, -1.50e6]
+OSQP solver: α_reduced = [-1.16e7, 4.04e7, -1.02e6]
+```
+
+This indicates:
+1. **Poorly conditioned constraint matrix**
+2. **F_id dominated by first component:** `F_id ≈ [-1.01, 0.006, 0.002, 0.0008]`
+3. The constraint `α·F_id = 1` only strongly constrains `α[0]`
+4. Other components are nearly free → solver finds "trivial" solutions
+
+### Root Cause Identification
+
+The ~1.2 unit gap is **NOT** caused by:
+- ❌ Incorrect F-vectors (verified against Mathematica)
+- ❌ Discrete vs continuous positivity (same gap)
+- ❌ Missing spinning operators (tested with El-Showk solver)
+- ❌ Numerical precision (tested multiple solvers)
+- ❌ Insufficient constraints (tested 3-31 constraints)
+
+The gap **IS** caused by:
+- **Different problem structure** than pycftboot/SDPB
+- pycftboot uses **polynomial matrix programs** (F-vectors are polynomials in Δ)
+- pycftboot uses **damped rational prefactors** and **bilinear bases**
+- Our discrete sampling creates a fundamentally easier optimization problem
+
+### pycftboot Architecture (from source analysis)
+
+Key differences in `pycftboot/bootstrap.py`:
+
+1. **PolynomialVector class** - F-vectors stored as polynomials in `delta` symbol
+2. **Bilinear basis** - Cholesky-decomposed orthogonal polynomial basis per spin channel
+3. **Sample points** - Laguerre-based points, not uniform Δ grid
+4. **Sample scalings** - Damped rational prefactors for convergence: `∏(δ - pole_i) * r_cross^δ`
+5. **XML/PMP format** - Specialized format read by SDPB
+
+### Next Steps
+
+1. **Install symengine** (required by pycftboot) and run pycftboot directly
+2. **Generate PMP file** from pycftboot at Ising point
+3. **Compare XML constraint structure** with our formulation
+4. **Install SDPB via Docker** and test with pycftboot-generated input
+
+---
+
 ## Contact
 
 If you find the discrepancy, please update:
