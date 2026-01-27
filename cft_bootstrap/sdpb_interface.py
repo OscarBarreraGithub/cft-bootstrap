@@ -114,13 +114,59 @@ except ImportError:
         HAVE_PYCFTBOOT_BRIDGE = False
 
 
+from enum import Enum, auto
+
+
+class SDPBExecutionMode(Enum):
+    """Execution mode for SDPB."""
+    BINARY = auto()      # Direct binary execution
+    DOCKER = auto()      # Docker container
+    SINGULARITY = auto() # Singularity container (for HPC clusters)
+
+
+@dataclass
+class DockerConfig:
+    """Configuration for Docker-based SDPB execution."""
+    image: str = "bootstrapcollaboration/sdpb:master"
+    # Additional docker run options (e.g., memory limits)
+    extra_options: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SingularityConfig:
+    """Configuration for Singularity-based SDPB execution (for HPC clusters like FASRC)."""
+    # Image path - can be set via SDPB_SINGULARITY_IMAGE environment variable
+    image_path: str = field(default_factory=lambda: os.environ.get(
+        "SDPB_SINGULARITY_IMAGE", "${HOME}/singularity/sdpb_master.sif"
+    ))
+    # Use srun for MPI (FASRC hybrid model) - can be set via SDPB_USE_SRUN env var
+    use_srun: bool = field(default_factory=lambda: os.environ.get(
+        "SDPB_USE_SRUN", "true"
+    ).lower() == "true")
+    # MPI type for srun (pmix for FASRC) - can be set via SDPB_MPI_TYPE env var
+    mpi_type: str = field(default_factory=lambda: os.environ.get(
+        "SDPB_MPI_TYPE", "pmix"
+    ))
+    # Additional singularity exec options
+    extra_options: List[str] = field(default_factory=list)
+
+
 @dataclass
 class SDPBConfig:
     """Configuration for SDPB solver."""
 
-    # Paths to SDPB executables
+    # Paths to SDPB executables (used for BINARY mode)
     sdpb_path: str = "sdpb"
     pmp2sdp_path: str = "pmp2sdp"
+
+    # Execution mode (auto-detected if None)
+    execution_mode: Optional[SDPBExecutionMode] = None
+
+    # Docker configuration (for DOCKER mode)
+    docker: DockerConfig = field(default_factory=DockerConfig)
+
+    # Singularity configuration (for SINGULARITY mode)
+    singularity: SingularityConfig = field(default_factory=SingularityConfig)
 
     # Numerical precision (in bits)
     precision: int = 400  # ~120 decimal digits
@@ -312,10 +358,12 @@ class PolynomialApproximator:
 
         # Add discrete constraint for first scalar
         # This is a 1x1 matrix constraint: [α·F_ε] ≽ 0
+        # Note: SDPB requires base to be strictly between 0 and 1
+        # For a constant (degree-0) polynomial, the base doesn't affect the result
         pmp["PositiveMatrixWithPrefactorArray"].append({
             "DampedRational": {
                 "constant": "1",
-                "base": "1",
+                "base": "0.5",  # Must be in (0, 1) for SDPB
                 "poles": []
             },
             "polynomials": [[
@@ -853,6 +901,11 @@ class SDPBSolver:
 
     This class provides a high-level interface to SDPB for computing
     rigorous bounds on operator dimensions.
+
+    Supports multiple execution modes:
+    - BINARY: Direct binary execution (SDPB in PATH)
+    - DOCKER: Docker container (for local development)
+    - SINGULARITY: Singularity container (for HPC clusters like Harvard FASRC)
     """
 
     def __init__(self, config: Optional[SDPBConfig] = None):
@@ -864,20 +917,56 @@ class SDPBSolver:
         """
         self.config = config or SDPBConfig()
 
+        # Auto-detect execution mode if not specified
+        self._execution_mode = self._detect_execution_mode()
+
         # Check if SDPB is available
-        self._sdpb_available = self._check_sdpb_available()
+        self._sdpb_available = self._execution_mode is not None
 
         if not self._sdpb_available:
             warnings.warn(
                 "SDPB not found. Install SDPB from https://github.com/davidsd/sdpb\n"
-                "Docker: docker pull davidsd/sdpb:master\n"
+                "Docker: docker pull bootstrapcollaboration/sdpb:master\n"
                 "The solver will fall back to CVXPY if available."
             )
+        else:
+            mode_name = self._execution_mode.name if self._execution_mode else "NONE"
+            # Only print in non-silent mode
+            if self.config.verbosity != "silent":
+                print(f"SDPB available via {mode_name}")
 
-    def _check_sdpb_available(self) -> bool:
-        """Check if SDPB executables are available."""
+    def _detect_execution_mode(self) -> Optional[SDPBExecutionMode]:
+        """Auto-detect the best available execution mode."""
+        # If user specified a mode, try that first
+        if self.config.execution_mode is not None:
+            if self._check_mode_available(self.config.execution_mode):
+                return self.config.execution_mode
+            else:
+                warnings.warn(
+                    f"Requested execution mode {self.config.execution_mode.name} "
+                    f"is not available, trying alternatives..."
+                )
+
+        # Try modes in order of preference
+        for mode in [SDPBExecutionMode.BINARY, SDPBExecutionMode.DOCKER, SDPBExecutionMode.SINGULARITY]:
+            if self._check_mode_available(mode):
+                return mode
+
+        return None
+
+    def _check_mode_available(self, mode: SDPBExecutionMode) -> bool:
+        """Check if a specific execution mode is available."""
+        if mode == SDPBExecutionMode.BINARY:
+            return self._check_binary_available()
+        elif mode == SDPBExecutionMode.DOCKER:
+            return self._check_docker_available()
+        elif mode == SDPBExecutionMode.SINGULARITY:
+            return self._check_singularity_available()
+        return False
+
+    def _check_binary_available(self) -> bool:
+        """Check if SDPB binary is available in PATH."""
         try:
-            # Check sdpb
             result = subprocess.run(
                 [self.config.sdpb_path, "--help"],
                 capture_output=True,
@@ -885,7 +974,6 @@ class SDPBSolver:
             )
             sdpb_ok = result.returncode == 0 or b"SDPB" in result.stdout or b"SDPB" in result.stderr
 
-            # Check pmp2sdp
             result = subprocess.run(
                 [self.config.pmp2sdp_path, "--help"],
                 capture_output=True,
@@ -896,6 +984,205 @@ class SDPBSolver:
             return sdpb_ok and pmp2sdp_ok
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return False
+
+    def _check_docker_available(self) -> bool:
+        """Check if SDPB Docker image is available."""
+        try:
+            # Check if docker is available
+            result = subprocess.run(
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode != 0:
+                return False
+
+            # Check if SDPB image exists
+            image_name = self.config.docker.image.split(":")[0]
+            for line in result.stdout.splitlines():
+                if image_name in line:
+                    return True
+
+            return False
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
+
+    def _check_singularity_available(self) -> bool:
+        """Check if SDPB Singularity image is available."""
+        try:
+            # Expand environment variables in path
+            image_path = os.path.expandvars(self.config.singularity.image_path)
+            image_path = os.path.expanduser(image_path)
+
+            # Check if singularity command exists
+            result = subprocess.run(
+                ["singularity", "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                return False
+
+            # Check if image file exists
+            return os.path.exists(image_path)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
+
+    def _run_command(
+        self,
+        cmd: List[str],
+        work_dir: Path,
+        timeout: int = 3600,
+        use_mpi: bool = False
+    ) -> subprocess.CompletedProcess:
+        """
+        Run a command using the appropriate execution mode.
+
+        Args:
+            cmd: Command and arguments to run (e.g., ["pmp2sdp", "--precision=400", ...])
+            work_dir: Working directory (mounted as volume for containers)
+            timeout: Command timeout in seconds
+            use_mpi: Whether to wrap with MPI (mpirun or srun)
+
+        Returns:
+            CompletedProcess result
+        """
+        if self._execution_mode == SDPBExecutionMode.BINARY:
+            return self._run_binary(cmd, work_dir, timeout, use_mpi)
+        elif self._execution_mode == SDPBExecutionMode.DOCKER:
+            return self._run_docker(cmd, work_dir, timeout, use_mpi)
+        elif self._execution_mode == SDPBExecutionMode.SINGULARITY:
+            return self._run_singularity(cmd, work_dir, timeout, use_mpi)
+        else:
+            raise RuntimeError("No SDPB execution mode available")
+
+    def _run_binary(
+        self,
+        cmd: List[str],
+        work_dir: Path,
+        timeout: int,
+        use_mpi: bool
+    ) -> subprocess.CompletedProcess:
+        """Run command as direct binary."""
+        if use_mpi:
+            full_cmd = ["mpirun", "-n", str(self.config.num_threads)] + cmd
+        else:
+            full_cmd = cmd
+
+        return subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(work_dir)
+        )
+
+    def _run_docker(
+        self,
+        cmd: List[str],
+        work_dir: Path,
+        timeout: int,
+        use_mpi: bool
+    ) -> subprocess.CompletedProcess:
+        """Run command in Docker container."""
+        # Build docker command
+        docker_cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{work_dir}:/data",
+            "-w", "/data",
+        ]
+
+        # Add extra options
+        docker_cmd.extend(self.config.docker.extra_options)
+
+        # Add image name
+        docker_cmd.append(self.config.docker.image)
+
+        # Add MPI wrapper if needed
+        if use_mpi:
+            docker_cmd.extend(["mpirun", "-n", str(self.config.num_threads)])
+
+        # Translate paths in command to container paths
+        translated_cmd = self._translate_paths_for_container(cmd, work_dir, "/data")
+        docker_cmd.extend(translated_cmd)
+
+        return subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+
+    def _run_singularity(
+        self,
+        cmd: List[str],
+        work_dir: Path,
+        timeout: int,
+        use_mpi: bool
+    ) -> subprocess.CompletedProcess:
+        """Run command in Singularity container (for HPC clusters)."""
+        # Expand image path
+        image_path = os.path.expandvars(self.config.singularity.image_path)
+        image_path = os.path.expanduser(image_path)
+
+        # Build command based on MPI mode
+        if use_mpi and self.config.singularity.use_srun:
+            # FASRC hybrid model: srun wraps singularity
+            full_cmd = [
+                "srun", "-n", str(self.config.num_threads),
+                f"--mpi={self.config.singularity.mpi_type}",
+                "singularity", "exec",
+            ]
+        elif use_mpi:
+            # Standard mpirun wrapping singularity
+            full_cmd = [
+                "mpirun", "-n", str(self.config.num_threads),
+                "singularity", "exec",
+            ]
+        else:
+            full_cmd = ["singularity", "exec"]
+
+        # Add extra options
+        full_cmd.extend(self.config.singularity.extra_options)
+
+        # Add image and command
+        full_cmd.append(image_path)
+        full_cmd.extend(cmd)
+
+        return subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(work_dir)
+        )
+
+    def _translate_paths_for_container(
+        self,
+        cmd: List[str],
+        host_dir: Path,
+        container_dir: str
+    ) -> List[str]:
+        """Translate host paths to container paths in command arguments."""
+        host_dir_str = str(host_dir)
+        translated = []
+        for arg in cmd:
+            # Handle --option=path format
+            if "=" in arg:
+                parts = arg.split("=", 1)
+                if host_dir_str in parts[1]:
+                    parts[1] = parts[1].replace(host_dir_str, container_dir)
+                translated.append("=".join(parts))
+            elif host_dir_str in arg:
+                translated.append(arg.replace(host_dir_str, container_dir))
+            else:
+                translated.append(arg)
+        return translated
+
+    def _check_sdpb_available(self) -> bool:
+        """Check if SDPB executables are available (legacy method for compatibility)."""
+        return self._execution_mode is not None
 
     @property
     def is_available(self) -> bool:
@@ -944,33 +1231,28 @@ class SDPBSolver:
             with open(pmp_file, 'w') as f:
                 json.dump(pmp, f, indent=2)
 
-            # Convert PMP to SDP format using pmp2sdp
+            # Define output directories
             sdp_dir = work_path / "sdp"
+            out_dir = work_path / "out"
+            checkpoint_dir = work_path / "ck"
+
+            # Convert PMP to SDP format using pmp2sdp
             pmp2sdp_cmd = [
-                self.config.pmp2sdp_path,
+                "pmp2sdp",
                 f"--precision={self.config.precision}",
                 f"--input={pmp_file}",
                 f"--output={sdp_dir}",
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = subprocess.run(
-                pmp2sdp_cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            result = self._run_command(pmp2sdp_cmd, work_path, timeout=300, use_mpi=False)
 
             if result.returncode != 0:
                 raise RuntimeError(f"pmp2sdp failed: {result.stderr}")
 
             # Run SDPB
-            out_dir = work_path / "out"
-            checkpoint_dir = work_path / "ck"
-
             sdpb_cmd = [
-                "mpirun", "-n", str(self.config.num_threads),
-                self.config.sdpb_path,
+                "sdpb",
                 f"--precision={self.config.precision}",
                 f"--sdpDir={sdp_dir}",
                 f"--outDir={out_dir}",
@@ -982,12 +1264,7 @@ class SDPBSolver:
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = subprocess.run(
-                sdpb_cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
+            result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=True)
 
             # Parse output
             out_file = out_dir / "out.txt"
@@ -1001,13 +1278,15 @@ class SDPBSolver:
                 solver_info = {
                     "status": "optimal" if is_excluded else "infeasible",
                     "output": output,
-                    "sdpb_return_code": result.returncode
+                    "sdpb_return_code": result.returncode,
+                    "execution_mode": self._execution_mode.name if self._execution_mode else "NONE"
                 }
             else:
                 solver_info = {
                     "status": "error",
                     "stderr": result.stderr,
-                    "stdout": result.stdout
+                    "stdout": result.stdout,
+                    "execution_mode": self._execution_mode.name if self._execution_mode else "NONE"
                 }
                 is_excluded = False
 
@@ -1886,6 +2165,8 @@ def test_sdpb_interface():
     print("\n4. Checking solver availability:")
     sdpb_solver = SDPBSolver()
     print(f"   SDPB available: {sdpb_solver.is_available}")
+    if sdpb_solver._execution_mode:
+        print(f"   Execution mode: {sdpb_solver._execution_mode.name}")
 
     fallback = FallbackSDPBSolver(max_deriv=11)
     print(f"   CVXPY fallback available: {fallback.is_available}")
@@ -1973,9 +2254,86 @@ def test_symbolic_bound_quick():
         return None
 
 
+def check_sdpb_availability() -> Dict[str, any]:
+    """
+    Check SDPB availability and return detailed information.
+
+    This function is useful for environment checking (check_env.py).
+
+    Returns:
+        Dictionary with:
+            - available: bool
+            - mode: str (BINARY, DOCKER, SINGULARITY, or NONE)
+            - details: str (description of how SDPB will be run)
+            - docker_image: str | None (Docker image if DOCKER mode)
+            - singularity_image: str | None (Singularity image if SINGULARITY mode)
+    """
+    config = SDPBConfig()
+
+    result = {
+        "available": False,
+        "mode": "NONE",
+        "details": "SDPB not found",
+        "docker_image": None,
+        "singularity_image": None,
+    }
+
+    # Check binary first
+    try:
+        proc = subprocess.run(["sdpb", "--help"], capture_output=True, timeout=5)
+        if proc.returncode == 0 or b"SDPB" in proc.stdout or b"SDPB" in proc.stderr:
+            result["available"] = True
+            result["mode"] = "BINARY"
+            result["details"] = "SDPB binary found in PATH"
+            return result
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    # Check Docker
+    try:
+        proc = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if proc.returncode == 0:
+            image_name = config.docker.image.split(":")[0]
+            for line in proc.stdout.splitlines():
+                if image_name in line:
+                    result["available"] = True
+                    result["mode"] = "DOCKER"
+                    result["details"] = f"Docker image: {line}"
+                    result["docker_image"] = line.strip()
+                    return result
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    # Check Singularity
+    try:
+        image_path = os.path.expandvars(config.singularity.image_path)
+        image_path = os.path.expanduser(image_path)
+
+        proc = subprocess.run(["singularity", "--version"], capture_output=True, timeout=5)
+        if proc.returncode == 0 and os.path.exists(image_path):
+            result["available"] = True
+            result["mode"] = "SINGULARITY"
+            result["details"] = f"Singularity image: {image_path}"
+            result["singularity_image"] = image_path
+            return result
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    return result
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--symbolic":
         test_symbolic_bound_quick()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--check":
+        # Quick availability check
+        info = check_sdpb_availability()
+        print(f"SDPB Available: {info['available']}")
+        print(f"Execution Mode: {info['mode']}")
+        print(f"Details: {info['details']}")
     else:
         test_sdpb_interface()

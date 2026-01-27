@@ -123,6 +123,22 @@ PRECISION=150
 SDPB_THREADS=4         # Threads for SDPB
 SDPB_PRECISION=400     # Bits of precision
 
+# ---------- Container Configuration (for HPC clusters) ----------
+# USE_SINGULARITY: Enable Singularity container execution
+#   - "true"  = Use Singularity container (recommended for FASRC)
+#   - "false" = Use direct binary (assumes SDPB in PATH)
+USE_SINGULARITY=true
+
+# SINGULARITY_IMAGE: Path to the SDPB Singularity image
+#   - Run setup_fasrc.sh to download and set up the image
+#   - Default location: ~/singularity/sdpb_master.sif
+SINGULARITY_IMAGE="${HOME}/singularity/sdpb_master.sif"
+
+# MPI_TYPE: MPI type for srun (FASRC uses pmix)
+#   - "pmix" = Standard for FASRC (Cannon cluster)
+#   - "pmi2" = Alternative for some systems
+MPI_TYPE="pmix"
+
 # ---------- Output ----------
 OUTPUT_DIR="results_elshowk_${SIGMA_MIN}_${SIGMA_MAX}_nmax${NMAX}_spin${MAX_SPIN}"
 
@@ -198,9 +214,30 @@ fi
 
 # Add SDPB flags if applicable
 if [[ "${METHOD}" == *"sdpb"* ]]; then
+    echo "SDPB parameters:"
+    echo "  threads = ${SDPB_THREADS}"
+    echo "  precision = ${SDPB_PRECISION} bits"
+    echo "  use_singularity = ${USE_SINGULARITY}"
+
     CMD="${CMD} \
         --sdpb-threads ${SDPB_THREADS} \
         --sdpb-precision ${SDPB_PRECISION}"
+
+    # Add Singularity configuration if enabled
+    if [[ "${USE_SINGULARITY}" == "true" ]]; then
+        if [[ ! -f "${SINGULARITY_IMAGE}" ]]; then
+            echo "ERROR: Singularity image not found at ${SINGULARITY_IMAGE}"
+            echo "Run setup_fasrc.sh first to download the SDPB image"
+            exit 1
+        fi
+        echo "  singularity_image = ${SINGULARITY_IMAGE}"
+        echo "  mpi_type = ${MPI_TYPE}"
+
+        # Set environment variables for the Python script to detect
+        export SDPB_SINGULARITY_IMAGE="${SINGULARITY_IMAGE}"
+        export SDPB_USE_SRUN="true"
+        export SDPB_MPI_TYPE="${MPI_TYPE}"
+    fi
 fi
 
 echo "=============================================="

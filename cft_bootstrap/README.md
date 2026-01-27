@@ -94,29 +94,53 @@ where u = zz̄ and v = (1-z)(1-z̄).
 
 SDPB (Semidefinite Program solver for the Bootstrap) is the gold-standard solver for conformal bootstrap problems. This implementation provides:
 
-1. **Polynomial Matrix Program (PMP) generation** - Approximates crossing constraints as polynomials
-2. **Automatic fallback** - Uses CVXPY if SDPB is not installed
-3. **High-order derivatives** - Supports 20+ constraint via Taylor series expansion
+1. **Multiple execution modes** - Docker (local), Singularity (HPC), or native binary
+2. **Automatic detection** - Finds the best available execution method
+3. **Cluster support** - Ready for Harvard FASRC and other SLURM clusters
+4. **Fallback** - Uses CVXPY if SDPB is not available
 
 ### Installing SDPB
 
-**macOS (Homebrew):**
+**Option 1: Docker (Recommended for local development)**
 ```bash
-brew tap davidsd/sdpb
-brew install sdpb
+# Pull the official SDPB image
+docker pull bootstrapcollaboration/sdpb:master
+
+# Verify installation
+docker run --rm bootstrapcollaboration/sdpb:master sdpb --version
 ```
 
-**Linux (Docker):**
+**Option 2: Singularity (Recommended for HPC clusters)**
 ```bash
-docker pull bootstrapcollaboration/sdpb
+# On cluster login node (or compute node for large pulls)
+singularity pull sdpb_master.sif docker://bootstrapcollaboration/sdpb:master
 ```
 
-**From source:** See [SDPB GitHub](https://github.com/davidsd/sdpb)
+**Option 3: Native binary**
+- macOS: `brew tap davidsd/sdpb && brew install sdpb`
+- From source: See [SDPB GitHub](https://github.com/davidsd/sdpb)
+
+### Checking SDPB Availability
+
+```bash
+# Full environment check
+python check_env.py -v
+
+# Quick SDPB check
+python sdpb_interface.py --check
+```
+
+Output shows which execution mode will be used:
+```
+SDPB Available: True
+Execution Mode: DOCKER
+Details: Docker image: bootstrapcollaboration/sdpb:master
+```
 
 ### Using SDPB
 
 ```bash
-# Basic usage (falls back to CVXPY if SDPB unavailable)
+# Basic usage (auto-detects Docker/Singularity/binary)
 python run_bootstrap.py --gap-bound --method sdpb
 
 # With high-order constraints
@@ -129,45 +153,107 @@ python run_bootstrap.py --gap-bound --sdpb-threads 8 --sdpb-precision 512
 ### Python API
 
 ```python
-from sdpb_interface import compute_bound_with_sdpb, SDPBConfig
+from sdpb_interface import SDPBSolver, SDPBConfig, check_sdpb_availability
 
-# Quick computation
-bound = compute_bound_with_sdpb(
-    delta_sigma=0.518,
-    delta_epsilon=1.41,
-    max_deriv=21,
-    tolerance=0.01
-)
-print(f"Δε' ≤ {bound:.4f}")
+# Check availability
+info = check_sdpb_availability()
+print(f"SDPB available: {info['available']} via {info['mode']}")
 
-# With custom configuration
+# Create solver (auto-detects Docker/Singularity/binary)
 config = SDPBConfig(
-    precision=512,      # bits
-    num_threads=8,
-    max_iterations=1000
+    precision=400,      # bits (~120 decimal digits)
+    num_threads=4,
+    max_iterations=500
 )
-from sdpb_interface import SDPBSolver
 solver = SDPBSolver(config)
-bound = solver.find_bound(0.518, 1.41, max_deriv=21)
+print(f"Using execution mode: {solver._execution_mode.name}")
+
+# Find bound
+if solver.is_available:
+    bound = solver.find_bound(
+        delta_sigma=0.518,
+        delta_epsilon=1.41,
+        max_deriv=21,
+        tolerance=0.01
+    )
+    print(f"Δε' ≤ {bound:.4f}")
 ```
+
+### Execution Modes
+
+| Mode | Use Case | Configuration |
+|------|----------|---------------|
+| `BINARY` | Native installation | Set `sdpb_path` in `SDPBConfig` |
+| `DOCKER` | Local development | Auto-detected if image exists |
+| `SINGULARITY` | HPC clusters (FASRC, etc.) | Set `SDPB_SINGULARITY_IMAGE` env var |
+
+The solver automatically detects and uses the best available mode.
 
 ## Cluster Execution
 
-For large-scale computation:
+### Harvard FASRC (Cannon) Setup
 
+**One-time setup:**
 ```bash
-# 1. Edit submit_cluster.sh with your parameters
-vim submit_cluster.sh
+# 1. SSH to FASRC
+ssh username@login.rc.fas.harvard.edu
+
+# 2. Request a compute node (image pull needs memory)
+salloc -p test -c 4 -t 01:00:00 --mem=8G
+
+# 3. Run the setup script
+cd /path/to/cft_bootstrap
+bash setup_fasrc.sh
+```
+
+This downloads the SDPB Singularity image to `~/singularity/sdpb_master.sif`.
+
+**Running jobs:**
+```bash
+# 1. Configure submit_cluster.sh
+#    - Set USE_SINGULARITY=true (default)
+#    - Verify SINGULARITY_IMAGE path
+#    - Set METHOD, NMAX, MAX_SPIN as needed
 
 # 2. Submit array job
 sbatch submit_cluster.sh
 
-# 3. Monitor
+# 3. Monitor progress
 squeue -u $USER
+tail -f logs/bootstrap_*.out
 
 # 4. Collect results
-python collect_and_plot.py --results-dir results_0.500_0.650
+python collect_and_plot.py --results-dir results/
 ```
+
+### Generic SLURM Cluster
+
+For other SLURM clusters:
+
+```bash
+# 1. Pull Singularity image (on compute node if login has memory limits)
+mkdir -p ~/singularity
+singularity pull ~/singularity/sdpb_master.sif docker://bootstrapcollaboration/sdpb:master
+
+# 2. Edit submit_cluster.sh
+vim submit_cluster.sh
+# Set: USE_SINGULARITY=true
+# Set: SINGULARITY_IMAGE="${HOME}/singularity/sdpb_master.sif"
+# Adjust: MPI_TYPE if needed (pmix, pmi2, etc.)
+
+# 3. Submit
+sbatch submit_cluster.sh
+```
+
+### Environment Variables for Cluster
+
+The SDPB solver reads these environment variables (set automatically by `submit_cluster.sh`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SDPB_SINGULARITY_IMAGE` | Path to `.sif` file | `~/singularity/sdpb_master.sif` |
+| `SDPB_USE_SRUN` | Use `srun` for MPI | `true` |
+| `SDPB_MPI_TYPE` | MPI type for srun | `pmix` |
 
 ## ⚠️ Critical Implementation Issues
 

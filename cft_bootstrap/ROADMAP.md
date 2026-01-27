@@ -47,21 +47,35 @@
 | Add `compute_bound_symbolic` convenience function | ✅ Done | Main entry point |
 | Update test suite | ✅ Done | Tests both Chebyshev and symbolic methods |
 
-### Phase 5: Validation (Blocked - Requires SDPB)
+### Phase 5: SDPB Installation & Container Support (Completed)
 
 | Task | Status | Priority | Notes |
 |------|--------|----------|-------|
 | Test with CVXPY discrete LP | ✅ Done | High | **Confirmed: discrete LP cannot produce accurate bounds** |
-| Install SDPB | 🔲 Blocked | Critical | Required for polynomial positivity |
+| Install SDPB via Docker | ✅ Done | Critical | `docker pull bootstrapcollaboration/sdpb:master` |
+| Add Docker execution mode | ✅ Done | Critical | Auto-detects Docker image |
+| Add Singularity support | ✅ Done | Critical | For HPC clusters (FASRC, etc.) |
+| Create FASRC setup script | ✅ Done | High | `setup_fasrc.sh` for Harvard cluster |
+| Update SLURM submission | ✅ Done | High | Singularity support in `submit_cluster.sh` |
+| Add integration tests | ✅ Done | High | 12 tests in `test_sdpb_integration.py` |
 | Test Ising point bound with SDPB | 🔲 Pending | High | Key validation: should get ~3.8 not 2.6 |
 | Full Figure 6 reproduction | 🔲 Pending | Final | End goal |
+
+**SDPB is now available via Docker (local) and Singularity (cluster).**
+
+Key files added/modified:
+- `sdpb_interface.py` - Added `SDPBExecutionMode`, `DockerConfig`, `SingularityConfig`
+- `setup_fasrc.sh` - One-time Harvard FASRC cluster setup
+- `submit_cluster.sh` - Singularity configuration for SLURM
+- `check_env.py` - Enhanced SDPB detection (Docker/Singularity/binary)
+- `test_sdpb_integration.py` - 12 integration tests
 
 **Key Finding**: The CVXPY fallback with discrete operator sampling **cannot** accurately reproduce bootstrap bounds. Testing confirms all gap values show as either "ALLOWED" or "EXCLUDED" regardless of the actual physics, because:
 1. Discrete sampling allows the solver to find "loopholes" between sample points
 2. The identity F-vector requires special handling (computed analytically, not from polynomials)
 3. F-vector magnitudes differ by many orders of magnitude, causing numerical issues
 
-**Solution**: SDPB must be installed to use polynomial positivity constraints instead of discrete sampling.
+**Solution**: SDPB is now installed and ready. Use `--method el-showk-sdpb` for polynomial positivity constraints.
 
 ---
 
@@ -213,34 +227,55 @@ The infrastructure for polynomial bootstrap is now in place:
 - ✅ Test suite with 15 passing tests
 - ✅ pycftboot bridge for symbolic conformal blocks
 - ✅ sdpb_interface.py updated with symbolic methods
+- ✅ **SDPB installed via Docker** (local development)
+- ✅ **Singularity support** for HPC clusters (Harvard FASRC, etc.)
+- ✅ **SLURM integration** with `submit_cluster.sh`
+- ✅ **Integration tests** (12 tests in `test_sdpb_integration.py`)
 
-**Critical Blocker**: SDPB must be installed for accurate bounds.
+**Previous Blocker (RESOLVED)**: SDPB is now available via Docker (local) and Singularity (cluster).
 
 The discrete LP approach (CVXPY with sampling) has been tested and **confirmed unable to produce accurate bounds**. This is expected - the bootstrap requires polynomial positivity constraints that only SDPB can provide.
 
 ### To Complete Validation
 
-1. **Install SDPB** (see instructions below)
+1. ✅ **SDPB installed** - Docker image pulled, Singularity support added
 2. Run: `python sdpb_interface.py --symbolic`
 3. Expected result: Δε' ≤ 3.8 at Ising point (Δσ=0.518, Δε=1.41)
 
-### SDPB Installation
+### Running on Cluster
 
-**Option 1: Docker (Recommended)**
 ```bash
-docker pull davidsd/sdpb:master
+# One-time setup on Harvard FASRC
+bash setup_fasrc.sh
+
+# Submit jobs
+sbatch submit_cluster.sh
 ```
 
-**Option 2: Homebrew (macOS)**
+### SDPB Installation (✅ Completed)
+
+**Local Development (Docker):**
 ```bash
-brew install sdpb
+# Pull the official image
+docker pull bootstrapcollaboration/sdpb:master
+
+# Verify
+python check_env.py -v
 ```
 
-**Option 3: Build from source**
+**HPC Cluster (Singularity):**
 ```bash
-git clone https://github.com/davidsd/sdpb.git
-cd sdpb
-# Follow instructions in INSTALL.md
+# On Harvard FASRC or similar SLURM cluster
+bash setup_fasrc.sh
+
+# Or manually:
+singularity pull ~/singularity/sdpb_master.sif docker://bootstrapcollaboration/sdpb:master
 ```
 
-Once SDPB is installed, the `SDPBSolver.find_bound_symbolic()` method will use it to compute accurate bounds matching El-Showk et al. (2012) Figure 6.
+**Verify installation:**
+```bash
+python sdpb_interface.py --check
+# Output: SDPB Available: True, Execution Mode: DOCKER
+```
+
+The code automatically detects Docker/Singularity/binary and uses the best available method.

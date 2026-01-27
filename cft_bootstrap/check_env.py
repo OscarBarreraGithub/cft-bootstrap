@@ -57,6 +57,16 @@ def check_sdpb() -> tuple[bool, str, str]:
     Check SDPB availability via multiple methods.
     Returns: (available, method, details)
     """
+    # Try using the sdpb_interface module's check function if available
+    try:
+        from sdpb_interface import check_sdpb_availability
+        info = check_sdpb_availability()
+        if info["available"]:
+            return True, info["mode"].lower(), info["details"]
+    except ImportError:
+        pass
+
+    # Fallback to manual checks
     # Method 1: Direct binary in PATH
     path = shutil.which("sdpb")
     if path:
@@ -67,19 +77,36 @@ def check_sdpb() -> tuple[bool, str, str]:
         except Exception:
             return True, "binary", path
 
-    # Method 2: Docker image
+    # Method 2: Docker image (check multiple possible image names)
     try:
         result = subprocess.run(
             ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
             capture_output=True, text=True, timeout=10
         )
-        for line in result.stdout.splitlines():
-            if "sdpb" in line.lower():
-                return True, "docker", f"image: {line}"
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "sdpb" in line.lower() or "bootstrapcollaboration" in line.lower():
+                    return True, "docker", f"image: {line}"
     except Exception:
         pass
 
-    # Method 3: Homebrew (macOS)
+    # Method 3: Singularity image (check common locations)
+    try:
+        result = subprocess.run(["singularity", "--version"], capture_output=True, timeout=5)
+        if result.returncode == 0:
+            # Check common Singularity image locations
+            common_paths = [
+                Path.home() / "singularity" / "sdpb_master.sif",
+                Path.home() / "singularity" / "sdpb.sif",
+                Path.home() / ".singularity" / "sdpb_master.sif",
+            ]
+            for sif_path in common_paths:
+                if sif_path.exists():
+                    return True, "singularity", f"image: {sif_path}"
+    except Exception:
+        pass
+
+    # Method 4: Homebrew (macOS)
     if sys.platform == "darwin":
         try:
             result = subprocess.run(["brew", "list"], capture_output=True, text=True, timeout=10)
@@ -89,6 +116,21 @@ def check_sdpb() -> tuple[bool, str, str]:
             pass
 
     return False, "none", "not installed"
+
+
+def check_pmp2sdp() -> tuple[bool, str]:
+    """Check if pmp2sdp is available (required alongside SDPB)."""
+    # Check binary
+    path = shutil.which("pmp2sdp")
+    if path:
+        return True, path
+
+    # For Docker/Singularity, pmp2sdp is bundled with SDPB image
+    sdpb_ok, method, _ = check_sdpb()
+    if sdpb_ok and method in ("docker", "singularity"):
+        return True, f"bundled with SDPB ({method})"
+
+    return False, "not found"
 
 
 def check_wolfram() -> tuple[bool, str]:
@@ -176,13 +218,23 @@ def main():
         print(f"  {check_mark(True)} SDPB available via {method}")
         if verbose:
             print(f"      {details}")
+
+        # Check pmp2sdp
+        pmp2sdp_ok, pmp2sdp_details = check_pmp2sdp()
+        if pmp2sdp_ok:
+            print(f"  {check_mark(True)} pmp2sdp available")
+            if verbose:
+                print(f"      {pmp2sdp_details}")
+        else:
+            print(f"  {warn_mark()} pmp2sdp not found (required for SDPB)")
+            warnings.append("pmp2sdp not found - required for SDPB")
     else:
         print(f"  {warn_mark()} SDPB not installed")
         print(f"      Install options:")
-        print(f"        Docker: docker pull davidsd/sdpb:master")
-        print(f"        HPC:    Singularity (see SDPB docs)")
+        print(f"        Docker: docker pull bootstrapcollaboration/sdpb:master")
+        print(f"        HPC:    singularity pull docker://bootstrapcollaboration/sdpb:master")
         print(f"        Source: https://github.com/davidsd/sdpb")
-        warnings.append("SDPB not installed - required for 60+ constraint runs")
+        warnings.append("SDPB not installed - required for accurate bootstrap bounds")
 
     # Wolfram
     print(f"\n{BOLD}Wolfram Language{RESET}")
