@@ -78,33 +78,57 @@ if HAVE_PYCFTBOOT:
         os.chdir(PYCFTBOOT_PATH)
 
         # Load common.py using exec() like pycftboot does
-        # We need to handle the SDPB path lookup which may fail
+        # We need to heavily patch it to avoid SDPB path lookups
+
+        # Instead of patching the code, inject a stub common module
+        # with the essential variables that blocks1.py/blocks2.py need
+        _pycftboot_namespace['cutoff'] = 0
+        _pycftboot_namespace['prec'] = 660
+        _pycftboot_namespace['dec_prec'] = int((3.0 / 10.0) * 660)
+        _pycftboot_namespace['tiny'] = RealMPFR("1e-" + str(330 // 2), 660)
+
+        # High-precision constants
+        _pycftboot_namespace['zero'] = RealMPFR("0", 660)
+        _pycftboot_namespace['one'] = RealMPFR("1", 660)
+        _pycftboot_namespace['two'] = RealMPFR("2", 660)
+        _pycftboot_namespace['r_cross'] = 3 - 2 * sqrt(RealMPFR("2", 660))
+
+        # Symbols
+        _pycftboot_namespace['ell'] = Symbol('ell')
+        _pycftboot_namespace['delta'] = Symbol('delta')
+        _pycftboot_namespace['delta_ext'] = Symbol('delta_ext')
+
+        # SDPB settings (stubs)
+        _pycftboot_namespace['sdpb_path'] = None
+        _pycftboot_namespace['mpirun_path'] = None
+        _pycftboot_namespace['sdpb_version_major'] = 2
+        _pycftboot_namespace['sdpb_version_minor'] = 0
+        _pycftboot_namespace['sdpb_options'] = []
+        _pycftboot_namespace['sdpb_defaults'] = []
+
+        # Define safe find_executable that returns None instead of raising
+        def safe_find_executable(name):
+            if os.path.isfile(name):
+                return name
+            for path in os.environ.get("PATH", "").split(os.pathsep):
+                test = os.path.join(path, name)
+                if os.path.isfile(test):
+                    return test
+            return None  # Don't raise
+
+        _pycftboot_namespace['find_executable'] = safe_find_executable
+
+        # Load the utility functions from common.py manually
         with open("common.py", 'r') as f:
             common_code = f.read()
 
-        # Patch the SDPB path lookup section to avoid failures
-        # Replace the path lookup and version detection with stubs
-        import re
-
-        # Replace find_executable call for sdpb
-        common_code = common_code.replace(
-            'if not os.path.isfile(sdpb_path):\n    sdpb_path = find_executable("sdpb")',
-            '# SDPB lookup disabled for bridge\npass'
-        )
-
-        # Replace subprocess call for version detection
-        common_code = common_code.replace(
-            'proc = subprocess.Popen([sdpb_path, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n(stdout, _) = proc.communicate()',
-            '# Version detection disabled for bridge\nproc = type("MockProc", (), {"returncode": 1})()\nstdout = b""'
-        )
-
-        # Also replace mpirun lookup
-        common_code = common_code.replace(
-            'if not os.path.isfile(mpirun_path):\n        mpirun_path = find_executable("mpirun")',
-            '# mpirun lookup disabled for bridge\n        pass'
-        )
-
-        exec(common_code, _pycftboot_namespace)
+        # Extract only the function definitions we need (rf, deepcopy, get_index, etc.)
+        # Skip the SDPB setup code
+        import_marker = 'def rf(x, n):'
+        func_start = common_code.find(import_marker)
+        if func_start > 0:
+            common_funcs = common_code[func_start:]
+            exec(common_funcs, _pycftboot_namespace)
 
         # Load blocks1.py with additional symengine functions
         _pycftboot_namespace['function_symbol'] = Symbol  # Used in blocks for special functions
@@ -116,6 +140,46 @@ if HAVE_PYCFTBOOT:
         with open("blocks2.py", 'r') as f:
             exec(f.read(), _pycftboot_namespace)
 
+        # Load bootstrap.py (has ConvolvedBlockTable and SDP)
+        with open("bootstrap.py", 'r') as f:
+            bootstrap_code = f.read()
+
+        # Remove the exec() calls for files we've already loaded
+        # These are at lines 37-42
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("common.py").read())',
+            '# common.py already loaded'
+        )
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("compat_autoboot.py").read())',
+            '# compat_autoboot.py skipped'
+        )
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("compat_juliboots.py").read())',
+            '# compat_juliboots.py skipped'
+        )
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("compat_scalar_blocks.py").read())',
+            '# compat_scalar_blocks.py skipped'
+        )
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("blocks1.py").read())',
+            '# blocks1.py already loaded'
+        )
+        bootstrap_code = bootstrap_code.replace(
+            'exec(open("blocks2.py").read())',
+            '# blocks2.py already loaded'
+        )
+
+        # Patch any find_executable calls in bootstrap.py
+        # The unisolve lookup at line 1744
+        bootstrap_code = bootstrap_code.replace(
+            'unisolve_path = find_executable("unisolve")',
+            'unisolve_path = find_executable("unisolve") or "unisolve"'
+        )
+
+        exec(bootstrap_code, _pycftboot_namespace)
+
         os.chdir(original_dir)
 
         # Extract what we need from the namespace
@@ -123,10 +187,14 @@ if HAVE_PYCFTBOOT:
         r_cross = _pycftboot_namespace.get('r_cross')
         delta = _pycftboot_namespace.get('delta')
         ell = _pycftboot_namespace.get('ell')
+        delta_ext = _pycftboot_namespace.get('delta_ext')
         ConformalBlockTableSeed = _pycftboot_namespace.get('ConformalBlockTableSeed')
         ConformalBlockTableSeed2 = _pycftboot_namespace.get('ConformalBlockTableSeed2')
+        ConformalBlockTable = _pycftboot_namespace.get('ConformalBlockTable')
+        ConvolvedBlockTable = _pycftboot_namespace.get('ConvolvedBlockTable')
         PolynomialVector = _pycftboot_namespace.get('PolynomialVector')
         coefficients = _pycftboot_namespace.get('coefficients')
+        SDP = _pycftboot_namespace.get('SDP')
 
         PYCFTBOOT_LOADED = True
         print(f"pycftboot loaded successfully from {PYCFTBOOT_PATH}")
@@ -193,7 +261,8 @@ class PycftbootBlockTable:
         self.odd_spins = odd_spins
 
         self.block_table = None
-        self.convolved_table = None
+        self.convolved_table_sym = None  # symmetric (F+ + F-)
+        self.convolved_table_asym = None  # antisymmetric (F+ - F-)
         self.m_order = []
         self.n_order = []
 
@@ -220,29 +289,39 @@ class PycftbootBlockTable:
             os.chdir(PYCFTBOOT_PATH)
 
             # Build the table using pycftboot's ConformalBlockTableSeed
+            # Note: ConformalBlockTableSeed takes (dim, k_max, l_max, m_max, n_max, ...)
             if self.dim == int(self.dim) and int(self.dim) % 2 == 0:
                 # Even integer dimension: use ConformalBlockTableSeed2
+                # ConformalBlockTableSeed2 takes derivative_order (not m_max, n_max separately)
+                derivative_order = self.m_max + 2 * self.n_max
                 self.block_table = ConformalBlockTableSeed2(
                     self.dim, self.k_max, self.l_max,
-                    min(self.m_max + 2 * self.n_max, 3),
+                    derivative_order,
                     self.delta_12, self.delta_34, self.odd_spins
                 )
             else:
                 # Non-integer or odd dimension: use ConformalBlockTableSeed
+                # This takes m_max and n_max separately
                 self.block_table = ConformalBlockTableSeed(
                     self.dim, self.k_max, self.l_max,
-                    min(self.m_max + 2 * self.n_max, 3), 0,
+                    self.m_max, self.n_max,
                     self.delta_12, self.delta_34, self.odd_spins
                 )
 
-            self.m_order = list(self.block_table.m_order)
-            self.n_order = list(self.block_table.n_order)
+            # Now create ConvolvedBlockTables (F-vectors)
+            # symmetric = F+ + F-, antisymmetric = F+ - F-
+            self.convolved_table_asym = ConvolvedBlockTable(self.block_table, symmetric=False)
+            self.convolved_table_sym = ConvolvedBlockTable(self.block_table, symmetric=True)
+
+            self.m_order = list(self.convolved_table_asym.m_order)
+            self.n_order = list(self.convolved_table_asym.n_order)
 
             os.chdir(original_dir)
 
             if verbose:
                 print(f"  Built table with {len(self.block_table.table)} spin channels")
-                print(f"  {len(self.m_order)} derivative components")
+                print(f"  Convolved (antisymmetric): {len(self.convolved_table_asym.table)} spin channels, {len(self.m_order)} components")
+                print(f"  Convolved (symmetric): {len(self.convolved_table_sym.table)} spin channels")
 
             return True
 
@@ -255,18 +334,23 @@ class PycftbootBlockTable:
                 print(f"  Error building table: {e}")
             return False
 
-    def get_polynomial_vectors(self) -> List[SymbolicPolynomialVector]:
+    def get_polynomial_vectors(self, symmetric: bool = False) -> List[SymbolicPolynomialVector]:
         """
-        Convert pycftboot table to list of SymbolicPolynomialVectors.
+        Get convolved F-vectors (not raw block derivatives).
+
+        Args:
+            symmetric: If True, return symmetric (F+ + F-) vectors, else antisymmetric (F+ - F-)
 
         Returns:
             List of SymbolicPolynomialVector, one per spin channel
         """
-        if self.block_table is None:
+        if self.convolved_table_asym is None:
             raise RuntimeError("Must call build() first")
 
+        conv_table = self.convolved_table_sym if symmetric else self.convolved_table_asym
+
         vectors = []
-        for poly_vec in self.block_table.table:
+        for poly_vec in conv_table.table:
             # Extract vector, label, and poles from pycftboot's PolynomialVector
             vector = list(poly_vec.vector)
             label = tuple(poly_vec.label)
@@ -281,20 +365,52 @@ class PycftbootBlockTable:
 
         return vectors
 
-    def get_spin_vector(self, spin: int) -> Optional[SymbolicPolynomialVector]:
+    def get_raw_block_vectors(self) -> List[SymbolicPolynomialVector]:
         """
-        Get the polynomial vector for a specific spin.
+        Get raw (unconvolved) conformal block derivatives.
+
+        Returns:
+            List of SymbolicPolynomialVector, one per spin channel
+        """
+        if self.block_table is None:
+            raise RuntimeError("Must call build() first")
+
+        vectors = []
+        for poly_vec in self.block_table.table:
+            vector = list(poly_vec.vector)
+            label = tuple(poly_vec.label)
+            poles = list(poly_vec.poles)
+
+            sym_vec = SymbolicPolynomialVector(
+                vector=vector,
+                label=label,
+                poles=poles
+            )
+            vectors.append(sym_vec)
+
+        return vectors
+
+    def get_spin_vector(self, spin: int, symmetric: bool = False) -> Optional[SymbolicPolynomialVector]:
+        """
+        Get the F-vector for a specific spin.
 
         Args:
             spin: The spin value
+            symmetric: If True, return symmetric F-vector
 
         Returns:
             SymbolicPolynomialVector or None if not found
         """
-        vectors = self.get_polynomial_vectors()
+        vectors = self.get_polynomial_vectors(symmetric=symmetric)
         for vec in vectors:
             if vec.spin == spin:
                 return vec
+        return None
+
+    def get_delta_ext_symbol(self):
+        """Get the delta_ext symbol used in the F-vectors."""
+        if PYCFTBOOT_LOADED:
+            return delta_ext
         return None
 
 

@@ -35,13 +35,33 @@
 
 **All tests pass. pycftboot bridge successfully builds symbolic block tables with 200+ digit precision.**
 
-### Remaining Work (Phase 3)
+### Phase 4: SDPB Interface Integration (Completed)
+
+| Task | Status | Notes |
+|------|--------|-------|
+| Add imports for polynomial infrastructure | ✅ Done | `HAVE_POLYNOMIAL_INFRASTRUCTURE`, `HAVE_PYCFTBOOT_BRIDGE` |
+| Create `SymbolicPolynomialApproximator` class | ✅ Done | Uses pycftboot bridge for exact polynomial F-vectors |
+| Add `is_excluded_symbolic` to SDPBSolver | ✅ Done | SDPB with exact polynomial PMP |
+| Add `find_bound_symbolic` to SDPBSolver | ✅ Done | Binary search with symbolic method |
+| Add symbolic methods to FallbackSDPBSolver | ✅ Done | CVXPY with dense sampling of polynomial F-vectors |
+| Add `compute_bound_symbolic` convenience function | ✅ Done | Main entry point |
+| Update test suite | ✅ Done | Tests both Chebyshev and symbolic methods |
+
+### Phase 5: Validation (Blocked - Requires SDPB)
 
 | Task | Status | Priority | Notes |
 |------|--------|----------|-------|
-| Update `sdpb_interface.py` | 🔄 In Progress | Medium | Connect polynomial infrastructure |
-| Test Ising point bound | 🔲 Pending | High | Key validation: should get ~3.8 not 2.6 |
+| Test with CVXPY discrete LP | ✅ Done | High | **Confirmed: discrete LP cannot produce accurate bounds** |
+| Install SDPB | 🔲 Blocked | Critical | Required for polynomial positivity |
+| Test Ising point bound with SDPB | 🔲 Pending | High | Key validation: should get ~3.8 not 2.6 |
 | Full Figure 6 reproduction | 🔲 Pending | Final | End goal |
+
+**Key Finding**: The CVXPY fallback with discrete operator sampling **cannot** accurately reproduce bootstrap bounds. Testing confirms all gap values show as either "ALLOWED" or "EXCLUDED" regardless of the actual physics, because:
+1. Discrete sampling allows the solver to find "loopholes" between sample points
+2. The identity F-vector requires special handling (computed analytically, not from polynomials)
+3. F-vector magnitudes differ by many orders of magnitude, causing numerical issues
+
+**Solution**: SDPB must be installed to use polynomial positivity constraints instead of discrete sampling.
 
 ---
 
@@ -191,10 +211,36 @@ The infrastructure for polynomial bootstrap is now in place:
 - ✅ Damped rational prefactor computation
 - ✅ PMP file generation for SDPB
 - ✅ Test suite with 15 passing tests
+- ✅ pycftboot bridge for symbolic conformal blocks
+- ✅ sdpb_interface.py updated with symbolic methods
 
-The main remaining work is:
-1. **Install symengine** for full symbolic polynomial support
-2. **Complete block computation** (either port recursion or import pycftboot)
-3. **Connect to SDPB** and validate at Ising point
+**Critical Blocker**: SDPB must be installed for accurate bounds.
 
-Once these are done, the ~1.2 unit gap should close, achieving accurate reproduction of El-Showk et al. (2012) Figure 6.
+The discrete LP approach (CVXPY with sampling) has been tested and **confirmed unable to produce accurate bounds**. This is expected - the bootstrap requires polynomial positivity constraints that only SDPB can provide.
+
+### To Complete Validation
+
+1. **Install SDPB** (see instructions below)
+2. Run: `python sdpb_interface.py --symbolic`
+3. Expected result: Δε' ≤ 3.8 at Ising point (Δσ=0.518, Δε=1.41)
+
+### SDPB Installation
+
+**Option 1: Docker (Recommended)**
+```bash
+docker pull davidsd/sdpb:master
+```
+
+**Option 2: Homebrew (macOS)**
+```bash
+brew install sdpb
+```
+
+**Option 3: Build from source**
+```bash
+git clone https://github.com/davidsd/sdpb.git
+cd sdpb
+# Follow instructions in INSTALL.md
+```
+
+Once SDPB is installed, the `SDPBSolver.find_bound_symbolic()` method will use it to compute accurate bounds matching El-Showk et al. (2012) Figure 6.
