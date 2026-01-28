@@ -25,8 +25,9 @@
 #SBATCH --output=test_sdpb_%j.out
 #SBATCH --error=test_sdpb_%j.err
 #SBATCH --account=iaifi_lab
-#SBATCH --partition=shared
-#SBATCH --ntasks=4
+#SBATCH --partition=test
+#SBATCH --ntasks=1
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
 #SBATCH --time=00:30:00
 #SBATCH --mem=8G
@@ -116,6 +117,7 @@ python run_bootstrap.py \
     --method el-showk-sdpb \
     --nmax 5 \
     --max-spin 10 \
+    --sdpb-threads 1 \
     --sigma-min 0.518 \
     --sigma-max 0.518 \
     --n-points 1 \

@@ -609,6 +609,84 @@ export SDPB_USE_SRUN="true"
 
 ---
 
+### January 2026 Update: SDPB Cluster Debugging (Session 2)
+
+Extensive debugging to get `el-showk-sdpb` actually running end-to-end on FASRC.
+Four distinct bugs found and fixed:
+
+#### Bug 1: PMP JSON structure wrong (pmp2sdp parse failure)
+
+`_build_polynomial_matrix` in both `PolynomialApproximator` and
+`ElShowkPolynomialApproximator` was iterating degree-first, variable-second,
+producing a transposed nested array structure. SDPB's PMP format expects:
+```
+polynomials[row][col] = [poly_var_0, poly_var_1, ...]
+```
+where each `poly_var_i = [coeff_deg0, coeff_deg1, ...]`. The code was producing
+`[[[degree_0_coeffs_for_all_vars], [degree_1_coeffs_for_all_vars], ...]]` — an
+extra nesting level that caused `pmp2sdp` to fail with "Not implemented:
+json_start_array()".
+
+**Fix:** Rewrote both `_build_polynomial_matrix` methods to iterate
+variable-first, producing one flat coefficient list per optimization variable.
+
+#### Bug 2: Discrete constraint structure wrong
+
+The discrete (constant polynomial) constraint wrapped the entire F_eps vector as
+one polynomial with N "coefficients" (treating each constraint value as a
+degree). Should be N constant (single-element) polynomials, one per variable.
+
+**Fix:** Changed `[self._format_vector(F_eps)]` to
+`[[v] for v in self._format_vector(F_eps)]` in both classes.
+
+#### Bug 3: SDPB errors swallowed silently
+
+After `_run_command(sdpb_cmd, ...)`, the code only checked if `out.txt` exists.
+If sdpb crashed (non-zero return code), the code silently returned
+`is_excluded = False` → "ALLOWED" for everything → bound = infinity.
+
+**Fix:** Added `result.returncode` check after both pmp2sdp and sdpb calls.
+Raises `RuntimeError` with full stderr/stdout on failure.
+
+#### Bug 4: Work directory not visible across MPI nodes
+
+SDPB runs via `srun -n N singularity exec ...` across multiple nodes. The
+work directory was created in `/tmp` (node-local on FASRC) or `/scratch`, but
+the singularity container didn't bind-mount it. Worker nodes couldn't find the
+SDP files.
+
+**Fixes (layered):**
+1. Changed tempdir base from `/tmp` to `/scratch` (shared filesystem), with
+   fallback to `__file__`'s directory (guaranteed shared for this repo)
+2. Added `--bind {work_dir}` to singularity exec command so the directory is
+   explicitly visible inside the container on all nodes
+
+#### Test script fix: single-node for small problems
+
+The test script used `--ntasks=4` without `--nodes=1`, so Slurm spread 4 MPI
+ranks across 3 nodes. For a 3-constraint test problem, this adds massive
+communication overhead for zero benefit. Changed to `--ntasks=1 --nodes=1`
+and `--sdpb-threads 1` for the test. Production runs with 66+ constraints
+should keep multi-node.
+
+#### symengine warning (non-blocking)
+
+The `symengine` import warning fires because `pycftboot_bridge.py` imports
+`symengine.lib.symengine_wrapper` (internal C sub-module). conda-forge's
+package may not expose this path. This does NOT affect the SDPB execution path —
+the actual F-vector computation uses numpy/scipy float64. To silence: `pip
+install symengine` inside the env (pip's wheel bundles the C wrapper).
+
+#### Current state
+
+- pmp2sdp: ✅ parses correctly (verified RC=0)
+- sdpb file visibility: ✅ fixed with --bind
+- Test script: ✅ single-node, single-task for small problems
+- Last test run (57377903): SDPB actually ran, hit 15-min time limit on test partition
+- Next step: re-run with the single-task test script — should complete in seconds
+
+---
+
 ## Overall Project Progress
 
 | Phase | Status | Description |

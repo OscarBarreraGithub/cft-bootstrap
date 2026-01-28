@@ -358,17 +358,16 @@ class PolynomialApproximator:
 
         # Add discrete constraint for first scalar
         # This is a 1x1 matrix constraint: [α·F_ε] ≽ 0
-        # Note: SDPB requires base to be strictly between 0 and 1
-        # For a constant (degree-0) polynomial, the base doesn't affect the result
+        # Each optimization variable i contributes a constant polynomial [F_eps[i]]
         pmp["PositiveMatrixWithPrefactorArray"].append({
             "DampedRational": {
                 "constant": "1",
                 "base": "0.5",  # Must be in (0, 1) for SDPB
                 "poles": []
             },
-            "polynomials": [[
-                [self._format_vector(F_eps)]  # 1x1 matrix with polynomial [[F_ε]]
-            ]]
+            "polynomials": [[[
+                [v] for v in self._format_vector(F_eps)
+            ]]]
         })
 
         # Add polynomial constraint for gap
@@ -397,32 +396,20 @@ class PolynomialApproximator:
         """
         Build the polynomial matrix for SDPB.
 
-        For a single scalar constraint, this is a 1x1 matrix:
-        M(x) = [[p(x)]] where p(x) = α·F_{Δ_gap + x}
-
-        The matrix entry is a polynomial whose coefficients depend on α.
+        SDPB PMP format for a 1x1 matrix with n optimization variables:
+            polynomials[row][col] = [poly_var_0, poly_var_1, ...]
+        where each poly_var_i = [coeff_deg0, coeff_deg1, ...] is the
+        polynomial contributed by optimization variable i.
         """
-        # For scalar bootstrap: 1x1 matrix
-        # Entry [0][0] is a polynomial in x with n_constraints coefficients
-        # Each coefficient at degree d is: Σᵢ αᵢ * F_poly.polynomials[i][d]
+        # Each optimization variable i has polynomial F_poly.polynomials[i]
+        # already stored as [coeff_deg0, coeff_deg1, ...]
+        poly_list = []
+        for i in range(self.n_constraints):
+            coeffs = F_poly.polynomials[i]
+            poly_list.append([f"{c:.15e}" for c in coeffs])
 
-        n_deg = F_poly.max_degree + 1
-
-        # Build matrix where entry [0][0][d] = vector of coefficients for degree d
-        # This is: [F_poly.polynomials[0][d], F_poly.polynomials[1][d], ...]
-        matrix_entry = []
-        for d in range(n_deg):
-            # Coefficient at degree d for each constraint
-            coeff_vec = []
-            for i in range(self.n_constraints):
-                if d < len(F_poly.polynomials[i]):
-                    coeff_vec.append(f"{F_poly.polynomials[i][d]:.15e}")
-                else:
-                    coeff_vec.append("0")
-            matrix_entry.append(coeff_vec)
-
-        # Wrap in matrix structure: [[[entry]]] for 1x1 matrix
-        return [[[matrix_entry]]]
+        # 1x1 matrix: polynomials[0][0] = list of per-variable polynomials
+        return [[poly_list]]
 
 
 class ElShowkPolynomialApproximator:
@@ -565,15 +552,16 @@ class ElShowkPolynomialApproximator:
         }
 
         # Add discrete constraint for first scalar
+        # Each optimization variable i contributes a constant polynomial [F_eps[i]]
         pmp["PositiveMatrixWithPrefactorArray"].append({
             "DampedRational": {
                 "constant": "1",
-                "base": "1",
+                "base": "0.5",  # Must be in (0, 1) for SDPB
                 "poles": []
             },
-            "polynomials": [[
-                [self._format_vector(F_eps)]
-            ]]
+            "polynomials": [[[
+                [v] for v in self._format_vector(F_eps)
+            ]]]
         })
 
         # Add polynomial constraint for scalar gap
@@ -617,22 +605,18 @@ class ElShowkPolynomialApproximator:
         """
         Build polynomial matrix structure for SDPB.
 
-        SDPB expects polynomials as nested lists:
-        [[[degree_0_coeffs, degree_1_coeffs, ...]]] for 1x1 matrix
+        SDPB PMP format for a 1x1 matrix with n optimization variables:
+            polynomials[row][col] = [poly_var_0, poly_var_1, ...]
+        where each poly_var_i = [coeff_deg0, coeff_deg1, ...] is the
+        polynomial contributed by optimization variable i.
         """
-        n_deg = max(len(p) for p in F_poly.polynomials)
+        poly_list = []
+        for i in range(self.n_constraints):
+            coeffs = F_poly.polynomials[i]
+            poly_list.append([f"{c:.15e}" for c in coeffs])
 
-        matrix_entry = []
-        for d in range(n_deg):
-            coeff_vec = []
-            for i in range(self.n_constraints):
-                if d < len(F_poly.polynomials[i]):
-                    coeff_vec.append(f"{F_poly.polynomials[i][d]:.15e}")
-                else:
-                    coeff_vec.append("0")
-            matrix_entry.append(coeff_vec)
-
-        return [[[matrix_entry]]]
+        # 1x1 matrix: polynomials[0][0] = list of per-variable polynomials
+        return [[poly_list]]
 
 
 class SymbolicPolynomialApproximator:
@@ -1146,6 +1130,9 @@ class SDPBSolver:
         # Add extra options
         full_cmd.extend(self.config.singularity.extra_options)
 
+        # Bind work directory so all MPI ranks can access it
+        full_cmd.extend(["--bind", str(work_dir)])
+
         # Add image and command
         full_cmd.append(image_path)
         full_cmd.extend(cmd)
@@ -1221,8 +1208,21 @@ class SDPBSolver:
             delta_epsilon, delta_epsilon_prime, delta_max
         )
 
-        # Create temporary directory for SDPB files
-        work_dir = self.config.work_dir or tempfile.mkdtemp(prefix="sdpb_")
+        # Create temporary directory for SDPB files on shared filesystem.
+        # /tmp is node-local on FASRC; srun dispatches sdpb across nodes
+        # so the work dir must be visible to all nodes.
+        if self.config.work_dir:
+            base_dir = self.config.work_dir
+        else:
+            # Try shared paths: /scratch, then this script's directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            for candidate in ["/scratch", script_dir]:
+                if os.path.isdir(candidate):
+                    base_dir = candidate
+                    break
+            else:
+                base_dir = "/tmp"
+        work_dir = tempfile.mkdtemp(prefix="sdpb_", dir=base_dir)
         work_path = Path(work_dir)
 
         try:
@@ -1266,6 +1266,13 @@ class SDPBSolver:
 
             result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=True)
 
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"sdpb failed (rc={result.returncode}):\n"
+                    f"stderr: {result.stderr}\n"
+                    f"stdout: {result.stdout}"
+                )
+
             # Parse output
             out_file = out_dir / "out.txt"
             if out_file.exists():
@@ -1282,13 +1289,12 @@ class SDPBSolver:
                     "execution_mode": self._execution_mode.name if self._execution_mode else "NONE"
                 }
             else:
-                solver_info = {
-                    "status": "error",
-                    "stderr": result.stderr,
-                    "stdout": result.stdout,
-                    "execution_mode": self._execution_mode.name if self._execution_mode else "NONE"
-                }
-                is_excluded = False
+                raise RuntimeError(
+                    f"sdpb returned rc=0 but no out.txt found at {out_file}.\n"
+                    f"stderr: {result.stderr}\n"
+                    f"stdout: {result.stdout}\n"
+                    f"work_dir contents: {list(work_path.rglob('*'))}"
+                )
 
             return is_excluded, solver_info
 
@@ -1440,8 +1446,18 @@ class SDPBSolver:
             n_max=n_max
         )
 
-        # Create temporary directory
-        work_dir = self.config.work_dir or tempfile.mkdtemp(prefix="sdpb_symbolic_")
+        # Create temporary directory on shared filesystem (same as is_excluded_sdpb)
+        if self.config.work_dir:
+            base_dir = self.config.work_dir
+        else:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            for candidate in ["/scratch", script_dir]:
+                if os.path.isdir(candidate):
+                    base_dir = candidate
+                    break
+            else:
+                base_dir = "/tmp"
+        work_dir = tempfile.mkdtemp(prefix="sdpb_symbolic_", dir=base_dir)
         work_path = Path(work_dir)
 
         try:
