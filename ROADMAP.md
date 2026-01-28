@@ -567,6 +567,61 @@ python run_bootstrap.py --gap-bound --method el-showk-sdpb --nmax 10 --max-spin 
 
 ---
 
+### January 2026 Update: FASRC Cluster Setup
+
+**Comprehensive cluster setup for Harvard FASRC (Cannon) with production-ready configuration.**
+
+#### Completed Infrastructure
+
+| Component | Status | File |
+|-----------|--------|------|
+| SLURM submission script | ✅ Updated | `submit_cluster.sh` |
+| Singularity setup script | ✅ Updated | `setup_fasrc.sh` |
+| Test script | ✅ New | `test_sdpb.sh` |
+| README cluster docs | ✅ Updated | `README.md` |
+
+#### Critical Fixes Applied
+
+| Issue | Fix |
+|-------|-----|
+| holyscratch01 obsolete | Use `$SCRATCH` environment variable |
+| `:master` tag non-reproducible | Pinned to `sdpb:3.1.0` |
+| `--cpus-per-task` breaks MPI | Changed to `--ntasks=4 --cpus-per-task=1` |
+| `el-showk` uses CVXPY float64 | Default to `el-showk-sdpb` for high precision |
+| `~/singularity/` quota-limited | Use `$SCRATCH/singularity/` |
+| Thread oversubscription | Added `OMP_NUM_THREADS=1` etc. |
+| Fragile conda activation | Robust fallback to Miniforge path |
+
+#### Environment Variables (verified in codebase)
+
+```bash
+export SDPB_SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+export SDPB_USE_SRUN="true"
+# SDPB_MPI_TYPE defaults to "pmix" - only override if MPI errors
+```
+
+#### Workflow
+
+1. **One-time setup:** `bash setup_fasrc.sh` (on compute node)
+2. **Create conda env:** `mamba create -n cft_bootstrap -c conda-forge python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y`
+3. **Test:** `sbatch test_sdpb.sh`
+4. **Production:** `sbatch submit_cluster.sh`
+
+---
+
+## Overall Project Progress
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1: Basic Bootstrap | ✅ Complete | Scalar conformal blocks, crossing equation, LP/SDP solvers |
+| Phase 2: High-Order Methods | ✅ Complete | Taylor series, spinning operators, El-Showk basis |
+| Phase 3: SDPB Integration | ✅ Complete | Docker/Singularity support, polynomial matrix programs |
+| Phase 4: Cluster Infrastructure | ✅ Complete | FASRC setup, SLURM scripts, environment configuration |
+| Phase 5: Production Runs | 🔄 In Progress | Awaiting cluster validation and parameter scans |
+| Phase 6: Publication | ⬜ Not Started | Reproduce Figure 6, write up results |
+
+---
+
 ## Files
 
 ### Core Solvers

@@ -25,16 +25,24 @@
 #SBATCH --array=0-19
 
 # ============================================================================
+# ACCOUNT & PARTITION (REQUIRED FOR FASRC)
+# ============================================================================
+#SBATCH --account=iaifi_lab
+#SBATCH --partition=shared
+
+# ============================================================================
 # RESOURCE CONFIGURATION
 # ============================================================================
+# For SDPB/MPI: use --ntasks (MPI ranks) not --cpus-per-task alone
 # Adjust based on method:
-#   - lp/sdp/cvxpy:  --mem=4G, --time=02:00:00, --cpus-per-task=1
-#   - el-showk:      --mem=16G, --time=08:00:00, --cpus-per-task=4
-#   - el-showk-sdpb: --mem=32G, --time=24:00:00, --cpus-per-task=8
+#   - lp/sdp/cvxpy:  --ntasks=1, --mem=4G, --time=02:00:00
+#   - el-showk:      --ntasks=1, --mem=16G, --time=08:00:00
+#   - el-showk-sdpb: --ntasks=4, --mem=32G, --time=24:00:00
 
 #SBATCH --time=08:00:00
 #SBATCH --mem=16G
-#SBATCH --cpus-per-task=4
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=1
 
 # ============================================================================
 # CONFIGURATION - MODIFY THESE FOR YOUR RUN
@@ -68,10 +76,11 @@ GAP_BOUND=true
 #   "hybrid"          - Polynomial + discrete samples
 #   "two-correlator"  - Two-correlator bootstrap (ssss + eeee)
 #   "mixed-correlator"- Full mixed correlator with matrix SDP
-#   "el-showk"        - El-Showk (2012) full derivative basis [RECOMMENDED]
-#   "el-showk-sdpb"   - El-Showk with SDPB high-precision solver
+#   "el-showk"        - El-Showk (2012) full derivative basis (uses CVXPY float64)
+#   "el-showk-sdpb"   - El-Showk with SDPB high-precision solver [RECOMMENDED]
 
-METHOD="el-showk"
+# Use el-showk-sdpb for publication-quality results (el-showk uses CVXPY float64)
+METHOD="el-showk-sdpb"
 
 # ---------- General Solver Parameters ----------
 MAX_DERIV=20           # Derivative order (el-showk uses nmax = MAX_DERIV // 2)
@@ -131,8 +140,9 @@ USE_SINGULARITY=true
 
 # SINGULARITY_IMAGE: Path to the SDPB Singularity image
 #   - Run setup_fasrc.sh to download and set up the image
-#   - Default location: ~/singularity/sdpb_master.sif
-SINGULARITY_IMAGE="${HOME}/singularity/sdpb_master.sif"
+#   - Use $SCRATCH (not $HOME) to avoid quota limits
+#   - Pin version for reproducibility (not :master)
+SINGULARITY_IMAGE="${SCRATCH}/singularity/sdpb_3.1.0.sif"
 
 # MPI_TYPE: MPI type for srun (FASRC uses pmix)
 #   - "pmix" = Standard for FASRC (Cannon cluster)
@@ -150,12 +160,20 @@ OUTPUT_DIR="results_elshowk_${SIGMA_MIN}_${SIGMA_MAX}_nmax${NMAX}_spin${MAX_SPIN
 mkdir -p ${OUTPUT_DIR}
 mkdir -p logs
 
-# Load modules (uncomment and adjust for your cluster)
-# module load python/3.9
-# module load scipy
+# Load Python/conda environment (robust with fallback)
+if command -v conda >/dev/null 2>&1; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+else
+    # Fallback to FASRC Miniforge path
+    source /n/sw/Miniforge3-24.7.1-0/etc/profile.d/conda.sh
+fi
+conda activate cft_bootstrap
 
-# Activate virtual environment (uncomment and adjust path)
-# source /path/to/venv/bin/activate
+# Prevent thread oversubscription (MKL/OpenMP can spawn threads per MPI rank)
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # ============================================================================
 # BUILD COMMAND

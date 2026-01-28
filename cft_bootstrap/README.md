@@ -193,67 +193,166 @@ The solver automatically detects and uses the best available mode.
 
 ### Harvard FASRC (Cannon) Setup
 
-**One-time setup:**
+> **Important:** The holyscratch01 filesystem was decommissioned in Feb 2025. Use `$SCRATCH` (resolves to `/n/netscratch`) for all work/output.
+
+#### Step 1: One-Time SDPB Setup
+
 ```bash
 # 1. SSH to FASRC
 ssh username@login.rc.fas.harvard.edu
 
-# 2. Request a compute node (image pull needs memory)
-salloc -p test -c 4 -t 01:00:00 --mem=8G
+# 2. Clone repo to scratch (NOT holyscratch01!)
+cd $SCRATCH
+git clone <repo-url> cft_bootstrap
+cd cft_bootstrap/cft_bootstrap
 
-# 3. Run the setup script
-cd /path/to/cft_bootstrap
-bash setup_fasrc.sh
+# 3. Request a compute node (image pull needs memory)
+salloc -p test -c 2 -t 01:00:00 --mem=8G
+
+# 4. Pull SDPB container (pinned version for reproducibility)
+mkdir -p $SCRATCH/singularity
+singularity pull $SCRATCH/singularity/sdpb_3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0
+
+# 5. Verify SDPB works
+singularity exec $SCRATCH/singularity/sdpb_3.1.0.sif sdpb --version
 ```
 
-This downloads the SDPB Singularity image to `~/singularity/sdpb_master.sif`.
+#### Step 2: Python Environment
 
-**Running jobs:**
 ```bash
-# 1. Configure submit_cluster.sh
-#    - Set USE_SINGULARITY=true (default)
-#    - Verify SINGULARITY_IMAGE path
-#    - Set METHOD, NMAX, MAX_SPIN as needed
+# Use mamba (available on FASRC via Miniforge3)
+mamba create -n cft_bootstrap -c conda-forge \
+    python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y
 
-# 2. Submit array job
-sbatch submit_cluster.sh
+mamba activate cft_bootstrap
 
-# 3. Monitor progress
-squeue -u $USER
-tail -f logs/bootstrap_*.out
-
-# 4. Collect results
-python collect_and_plot.py --results-dir results/
+# Verify
+python -c "import numpy, scipy, cvxpy, mpmath, symengine; print('All packages OK')"
 ```
+
+#### Step 3: Configure Job Scripts
+
+Edit `submit_cluster.sh` with these critical settings:
+
+```bash
+# SLURM resources (for MPI - don't use cpus-per-task alone)
+#SBATCH --account=iaifi_lab          # Your account
+#SBATCH --partition=shared           # Or your partition
+#SBATCH --ntasks=4                   # MPI ranks
+#SBATCH --cpus-per-task=1            # Avoid oversubscription
+
+# Method (must use el-showk-sdpb for high precision)
+METHOD="el-showk-sdpb"
+
+# Container path (use $SCRATCH, pinned version)
+SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+```
+
+#### Step 4: Test Before Production
+
+Create `test_sdpb.sh`:
+```bash
+#!/bin/bash
+#SBATCH --job-name=test_sdpb
+#SBATCH --output=test_sdpb_%j.out
+#SBATCH --account=iaifi_lab
+#SBATCH --partition=shared
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=1
+#SBATCH --time=00:10:00
+#SBATCH --mem=4G
+
+# Robust conda activation
+if command -v conda >/dev/null 2>&1; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+else
+    source /n/sw/Miniforge3-24.7.1-0/etc/profile.d/conda.sh
+fi
+conda activate cft_bootstrap
+
+# Prevent thread oversubscription
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
+# SDPB configuration
+export SDPB_SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+export SDPB_USE_SRUN="true"
+
+# Verify SDPB before running
+singularity exec "$SDPB_SINGULARITY_IMAGE" sdpb --version || exit 1
+
+cd $SCRATCH/cft_bootstrap/cft_bootstrap
+python run_bootstrap.py --gap-bound --method el-showk-sdpb \
+    --nmax 5 --max-spin 10 --sigma-min 0.518 --sigma-max 0.518 \
+    --n-points 1 --output-dir $SCRATCH/test_run
+
+# Check output
+ls -lh $SCRATCH/test_run
+```
+
+Submit test: `sbatch test_sdpb.sh`
+
+**Success:** Output shows "Using SDPB solver" and files appear in `$SCRATCH/test_run/`
+
+#### Step 5: Production Jobs
+
+```bash
+cd $SCRATCH/cft_bootstrap/cft_bootstrap
+mkdir -p logs
+sbatch submit_cluster.sh
+squeue -u $USER
+```
+
+### ⚠️ FASRC-Specific Warnings
+
+1. **$SCRATCH in #SBATCH headers:** Do NOT use `$SCRATCH` in `#SBATCH` directives. SLURM parses these before your shell runs, so variables won't expand. Use relative paths or absolute `/n/netscratch/...` paths.
+
+2. **MPI type:** The default `pmix` works for most cases. If you get MPI plugin errors, try `export SDPB_MPI_TYPE="pmix_v3"` or `"pmi2"`.
+
+3. **Spack alternative:** If you prefer native SDPB over containers:
+   ```bash
+   module load ncf/1.0.0-fasrc01
+   module load spack/main-ncf
+   spack install sdpb
+   spack find --format "{hash:7} {name} {version}" sdpb
+   spack load /<hash>
+   ```
 
 ### Generic SLURM Cluster
 
 For other SLURM clusters:
 
 ```bash
-# 1. Pull Singularity image (on compute node if login has memory limits)
-mkdir -p ~/singularity
-singularity pull ~/singularity/sdpb_master.sif docker://bootstrapcollaboration/sdpb:master
+# 1. Pull Singularity image (pinned version)
+mkdir -p $SCRATCH/singularity
+singularity pull $SCRATCH/singularity/sdpb_3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0
 
 # 2. Edit submit_cluster.sh
-vim submit_cluster.sh
-# Set: USE_SINGULARITY=true
-# Set: SINGULARITY_IMAGE="${HOME}/singularity/sdpb_master.sif"
-# Adjust: MPI_TYPE if needed (pmix, pmi2, etc.)
+#    - Set SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+#    - Adjust MPI_TYPE if needed (pmix, pmi2, etc.)
+#    - Add your account/partition
 
 # 3. Submit
 sbatch submit_cluster.sh
 ```
 
-### Environment Variables for Cluster
+### Environment Variables for SDPB
 
-The SDPB solver reads these environment variables (set automatically by `submit_cluster.sh`):
+These are read by `sdpb_interface.py` (set automatically by `submit_cluster.sh`):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SDPB_SINGULARITY_IMAGE` | Path to `.sif` file | `~/singularity/sdpb_master.sif` |
-| `SDPB_USE_SRUN` | Use `srun` for MPI | `true` |
+| `SDPB_SINGULARITY_IMAGE` | Path to `.sif` file | `${HOME}/singularity/sdpb_master.sif` |
+| `SDPB_USE_SRUN` | Use `srun` for MPI (SLURM) | `true` |
 | `SDPB_MPI_TYPE` | MPI type for srun | `pmix` |
+
+**Anti-oversubscription:** Always set these in job scripts:
+```bash
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+```
 
 ## ⚠️ Critical Implementation Issues
 

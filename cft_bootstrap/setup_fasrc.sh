@@ -28,9 +28,11 @@
 set -e  # Exit on error
 
 # Configuration
-SINGULARITY_DIR="${HOME}/singularity"
-SDPB_IMAGE="sdpb_master.sif"
-SDPB_DOCKER_IMAGE="bootstrapcollaboration/sdpb:master"
+# Use $SCRATCH instead of $HOME (quota-limited) - resolves to /n/netscratch on FASRC
+SINGULARITY_DIR="${SCRATCH}/singularity"
+# Pin to specific version for reproducibility (not :master)
+SDPB_IMAGE="sdpb_3.1.0.sif"
+SDPB_DOCKER_IMAGE="bootstrapcollaboration/sdpb:3.1.0"
 
 echo "=============================================="
 echo "SDPB Setup for Harvard FASRC"
@@ -135,9 +137,12 @@ echo ""
 echo "Image size: $(du -h "${SINGULARITY_DIR}/${SDPB_IMAGE}" | cut -f1)"
 echo ""
 echo "Next steps:"
-echo "  1. Edit submit_cluster.sh to set USE_SINGULARITY=true"
-echo "  2. Verify SINGULARITY_IMAGE path is correct"
-echo "  3. Submit jobs: sbatch submit_cluster.sh"
+echo "  1. Verify SINGULARITY_IMAGE in submit_cluster.sh points to:"
+echo "     \$SCRATCH/singularity/sdpb_3.1.0.sif"
+echo "  2. Set up Python environment:"
+echo "     mamba create -n cft_bootstrap -c conda-forge python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y"
+echo "  3. Submit test job: sbatch test_sdpb.sh"
+echo "  4. Submit production: sbatch submit_cluster.sh"
 echo ""
 echo "To test SDPB manually:"
 echo "  singularity exec ${SINGULARITY_DIR}/${SDPB_IMAGE} sdpb --help"
