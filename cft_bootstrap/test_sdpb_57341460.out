@@ -1,0 +1,79 @@
+==============================================
+SDPB Test Job
+==============================================
+Job ID: 57341460
+Node: holy7c04206
+Date: Wed Jan 28 02:01:31 EST 2026
+
+1. Activating conda environment...
+   Python: /n/home09/obarrera/.conda/envs/cft_bootstrap/bin/python
+   Version: Python 3.10.19
+
+2. Setting SDPB environment variables...
+   SDPB_SINGULARITY_IMAGE=/n/netscratch/schwartz_lab/Everyone/obarrera/singularity/sdpb_3.1.0.sif
+   SDPB_USE_SRUN=true
+
+3. Verifying SDPB is accessible...
+   Image size: 300M
+SDPB 3.1.0
+
+Dependencies: 
+  Boost 1_82
+  Elemental 0.88-dev
+  FLINT 3.2.0-dev
+  GMP 6.3.0
+  libarchive 3.8.0
+  libxml 2.11.8
+  MPFR 4.2.0-p12
+  MPSolve 3.2.2
+  RapidJSON 1.1.0
+  OpenBLAS 0.3.25 DYNAMIC_ARCH NO_AFFINITY SkylakeX MAX_THREADS=256
+
+Elemental version information:
+  Git revision: 4e03e7a66c0ba08d04edbcfdd951ed72b37655f2
+  Version:      0.88-dev
+  Build type:   Release
+
+Elemental configuration:
+  Math libraries:               /usr/lib/libopenblas.so;/usr/lib/libgmp.so;/usr/lib/libgmpxx.so;/usr/lib/libmpfr.so
+  Have FLAME bidiagonal SVD:    NO
+  Hybrid mode:                  NO
+  Have Qt5:                     NO
+  Avoiding complex MPI:         YES
+  Have MPI_Reducescatter_block: YES
+  AllReduce ReduceScatterBlock: NO
+  Use byte AllGathers:          YES
+
+Elemental's C compiler info:
+  EL_CMAKE_C_COMPILER:    /usr/bin/mpicc
+  EL_MPI_C_COMPILER:      /usr/bin/mpicc
+  EL_MPI_C_INCLUDE_PATH:  
+  EL_MPI_C_COMPILE_FLAGS: 
+  EL_MPI_C_LINK_FLAGS:    
+  EL_MPI_C_LIBRARIES:     
+
+Elemental's C++ compiler info:
+  EL_CMAKE_CXX_COMPILER:    /usr/bin/mpicxx
+  EL_CXX_FLAGS:             -O3 -fcx-fortran-rules -std=gnu++17 
+  EL_MPI_CXX_COMPILER:      /usr/bin/mpicxx
+  EL_MPI_CXX_INCLUDE_PATH:  
+  EL_MPI_CXX_COMPILE_FLAGS: 
+  EL_MPI_CXX_LINK_FLAGS:    
+  EL_MPI_CXX_LIBRARIES:     
+
+   SDPB OK!
+
+4. Running bootstrap test...
+Computing Δε' bound with gap assumption
+  Δσ = 0.518
+  Δε = 1.41 (assumed first scalar)
+  Method: el-showk-sdpb
+  Max derivative order: 5
+  Number of constraints: 3
+  Tolerance: 0.01
+  Using El-Showk derivative basis with SDPB:
+    nmax = 5 (21 coefficients)
+    max_spin = 10
+    poly_degree = 15
+SDPB available via SINGULARITY
+  Using SDPB solver

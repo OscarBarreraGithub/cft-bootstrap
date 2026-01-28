@@ -28,7 +28,7 @@
 #SBATCH --partition=shared
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=1
-#SBATCH --time=00:15:00
+#SBATCH --time=00:30:00
 #SBATCH --mem=8G
 
 set -e  # Exit on error

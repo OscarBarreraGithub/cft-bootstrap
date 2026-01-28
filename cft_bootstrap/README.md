@@ -224,8 +224,7 @@ singularity exec $WORKDIR/singularity/sdpb_3.1.0.sif sdpb --version
 
 ```bash
 # Use mamba (available on FASRC via Miniforge3)
-mamba create -n cft_bootstrap -c conda-forge \
-    python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y
+mamba create -n cft_bootstrap -c conda-forge python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y
 
 mamba activate cft_bootstrap
 
@@ -449,3 +448,27 @@ The Ising model sits at the kink where the bound is tightest.
 2. El-Showk et al. - "Solving the 3D Ising Model with the Conformal Bootstrap" (2012)
 3. Poland, Rychkov, Vichi - "The Conformal Bootstrap" (2019 review)
 4. Simmons-Duffin - "SDPB: A Semidefinite Program Solver for the Conformal Bootstrap" (2015)
+
+
+On the cluster, run:
+
+
+# Your working directory
+cd /n/netscratch/schwartz_lab/Everyone/$USER
+
+# Clone repo
+git clone <repo-url> cft_bootstrap
+
+# Get compute node
+salloc -p test -c 2 -t 01:00:00 --mem=8G
+
+# Pull container
+mkdir -p singularity
+singularity pull singularity/sdpb_3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0
+
+# Create conda env
+mamba create -n cft_bootstrap -c conda-forge python=3.10 numpy scipy matplotlib mpmath cvxpy symengine -y
+
+# Test
+cd cft_bootstrap/cft_bootstrap
+sbatch test_sdpb.sh
