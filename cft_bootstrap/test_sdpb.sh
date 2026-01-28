@@ -25,11 +25,11 @@
 #SBATCH --output=test_sdpb_%j.out
 #SBATCH --error=test_sdpb_%j.err
 #SBATCH --account=iaifi_lab
-#SBATCH --partition=test
+#SBATCH --partition=shared
 #SBATCH --ntasks=1
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=00:30:00
+#SBATCH --time=01:30:00
 #SBATCH --mem=8G
 
 set -e  # Exit on error
