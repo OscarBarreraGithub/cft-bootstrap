@@ -11,11 +11,11 @@
 #
 # SUCCESS INDICATORS:
 #   1. Output shows "Using SDPB solver" (not "Using CVXPY fallback")
-#   2. Output files appear in $SCRATCH/test_run/
+#   2. Output files appear in $WORKDIR/test_run/
 #   3. No "SDPB not found!" or MPI plugin errors
 #
 # IF IT FAILS:
-#   - Check SDPB container exists: ls $SCRATCH/singularity/sdpb_3.1.0.sif
+#   - Check SDPB container exists: ls $WORKDIR/singularity/sdpb_3.1.0.sif
 #   - Check conda env exists: conda env list | grep cft_bootstrap
 #   - If MPI errors, try: export SDPB_MPI_TYPE="pmix_v3" or "pmi2"
 #
@@ -32,6 +32,12 @@
 #SBATCH --mem=8G
 
 set -e  # Exit on error
+
+# ============================================================================
+# WORKDIR: Your personal scratch space on FASRC
+# $SCRATCH points to /n/netscratch (base), but your space is under lab/Everyone/user
+# ============================================================================
+WORKDIR="${SCRATCH}/schwartz_lab/Everyone/${USER}"
 
 echo "=============================================="
 echo "SDPB Test Job"
@@ -68,7 +74,7 @@ export NUMEXPR_NUM_THREADS=1
 
 echo ""
 echo "2. Setting SDPB environment variables..."
-export SDPB_SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+export SDPB_SINGULARITY_IMAGE="$WORKDIR/singularity/sdpb_3.1.0.sif"
 export SDPB_USE_SRUN="true"
 # Note: SDPB_MPI_TYPE defaults to "pmix". If job fails with MPI plugin error, try:
 #   export SDPB_MPI_TYPE="pmix_v3"  # or "pmi2"
@@ -100,10 +106,10 @@ echo "   SDPB OK!"
 
 echo ""
 echo "4. Running bootstrap test..."
-cd $SCRATCH/cft_bootstrap/cft_bootstrap
+cd $WORKDIR/cft_bootstrap/cft_bootstrap
 
 # Clean previous test output
-rm -rf $SCRATCH/test_run
+rm -rf $WORKDIR/test_run
 
 python run_bootstrap.py \
     --gap-bound \
@@ -113,7 +119,7 @@ python run_bootstrap.py \
     --sigma-min 0.518 \
     --sigma-max 0.518 \
     --n-points 1 \
-    --output-dir $SCRATCH/test_run
+    --output-dir $WORKDIR/test_run
 
 # ============================================================================
 # VERIFY OUTPUT
@@ -121,9 +127,9 @@ python run_bootstrap.py \
 
 echo ""
 echo "5. Checking output files..."
-if [[ -d "$SCRATCH/test_run" ]]; then
+if [[ -d "$WORKDIR/test_run" ]]; then
     echo "   Output directory exists:"
-    ls -lh $SCRATCH/test_run | head -10
+    ls -lh $WORKDIR/test_run | head -10
 else
     echo "   WARNING: Output directory not found"
 fi

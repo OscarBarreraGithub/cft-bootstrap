@@ -133,6 +133,10 @@ SDPB_THREADS=4         # Threads for SDPB
 SDPB_PRECISION=400     # Bits of precision
 
 # ---------- Container Configuration (for HPC clusters) ----------
+# WORKDIR: Your personal scratch space on FASRC
+# $SCRATCH points to /n/netscratch (base), but your space is under lab/Everyone/user
+WORKDIR="${SCRATCH}/schwartz_lab/Everyone/${USER}"
+
 # USE_SINGULARITY: Enable Singularity container execution
 #   - "true"  = Use Singularity container (recommended for FASRC)
 #   - "false" = Use direct binary (assumes SDPB in PATH)
@@ -140,9 +144,9 @@ USE_SINGULARITY=true
 
 # SINGULARITY_IMAGE: Path to the SDPB Singularity image
 #   - Run setup_fasrc.sh to download and set up the image
-#   - Use $SCRATCH (not $HOME) to avoid quota limits
+#   - Use $WORKDIR (not $HOME) to avoid quota limits
 #   - Pin version for reproducibility (not :master)
-SINGULARITY_IMAGE="${SCRATCH}/singularity/sdpb_3.1.0.sif"
+SINGULARITY_IMAGE="${WORKDIR}/singularity/sdpb_3.1.0.sif"
 
 # MPI_TYPE: MPI type for srun (FASRC uses pmix)
 #   - "pmix" = Standard for FASRC (Cannon cluster)

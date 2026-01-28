@@ -193,7 +193,7 @@ The solver automatically detects and uses the best available mode.
 
 ### Harvard FASRC (Cannon) Setup
 
-> **Important:** The holyscratch01 filesystem was decommissioned in Feb 2025. Use `$SCRATCH` (resolves to `/n/netscratch`) for all work/output.
+> **Important:** The holyscratch01 filesystem was decommissioned in Feb 2025. Use your personal scratch space (`$SCRATCH/<lab>/Everyone/$USER`, e.g., `/n/netscratch/schwartz_lab/Everyone/obarrera`) for all work/output. Note: `$SCRATCH` alone points to `/n/netscratch` (the base), not your personal directory.
 
 #### Step 1: One-Time SDPB Setup
 
@@ -201,20 +201,23 @@ The solver automatically detects and uses the best available mode.
 # 1. SSH to FASRC
 ssh username@login.rc.fas.harvard.edu
 
-# 2. Clone repo to scratch (NOT holyscratch01!)
-cd $SCRATCH
+# 2. Set your working directory (adjust lab name as needed)
+WORKDIR="$SCRATCH/schwartz_lab/Everyone/$USER"
+cd $WORKDIR
+
+# 3. Clone repo
 git clone <repo-url> cft_bootstrap
 cd cft_bootstrap/cft_bootstrap
 
-# 3. Request a compute node (image pull needs memory)
+# 4. Request a compute node (image pull needs memory)
 salloc -p test -c 2 -t 01:00:00 --mem=8G
 
-# 4. Pull SDPB container (pinned version for reproducibility)
-mkdir -p $SCRATCH/singularity
-singularity pull $SCRATCH/singularity/sdpb_3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0
+# 5. Pull SDPB container (pinned version for reproducibility)
+mkdir -p $WORKDIR/singularity
+singularity pull $WORKDIR/singularity/sdpb_3.1.0.sif docker://bootstrapcollaboration/sdpb:3.1.0
 
-# 5. Verify SDPB works
-singularity exec $SCRATCH/singularity/sdpb_3.1.0.sif sdpb --version
+# 6. Verify SDPB works
+singularity exec $WORKDIR/singularity/sdpb_3.1.0.sif sdpb --version
 ```
 
 #### Step 2: Python Environment
@@ -244,61 +247,22 @@ Edit `submit_cluster.sh` with these critical settings:
 # Method (must use el-showk-sdpb for high precision)
 METHOD="el-showk-sdpb"
 
-# Container path (use $SCRATCH, pinned version)
-SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
+# Container path (use $WORKDIR, pinned version)
+SINGULARITY_IMAGE="$WORKDIR/singularity/sdpb_3.1.0.sif"
 ```
 
 #### Step 4: Test Before Production
 
-Create `test_sdpb.sh`:
-```bash
-#!/bin/bash
-#SBATCH --job-name=test_sdpb
-#SBATCH --output=test_sdpb_%j.out
-#SBATCH --account=iaifi_lab
-#SBATCH --partition=shared
-#SBATCH --ntasks=4
-#SBATCH --cpus-per-task=1
-#SBATCH --time=00:10:00
-#SBATCH --mem=4G
-
-# Robust conda activation
-if command -v conda >/dev/null 2>&1; then
-    source "$(conda info --base)/etc/profile.d/conda.sh"
-else
-    source /n/sw/Miniforge3-24.7.1-0/etc/profile.d/conda.sh
-fi
-conda activate cft_bootstrap
-
-# Prevent thread oversubscription
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-
-# SDPB configuration
-export SDPB_SINGULARITY_IMAGE="$SCRATCH/singularity/sdpb_3.1.0.sif"
-export SDPB_USE_SRUN="true"
-
-# Verify SDPB before running
-singularity exec "$SDPB_SINGULARITY_IMAGE" sdpb --version || exit 1
-
-cd $SCRATCH/cft_bootstrap/cft_bootstrap
-python run_bootstrap.py --gap-bound --method el-showk-sdpb \
-    --nmax 5 --max-spin 10 --sigma-min 0.518 --sigma-max 0.518 \
-    --n-points 1 --output-dir $SCRATCH/test_run
-
-# Check output
-ls -lh $SCRATCH/test_run
-```
+The test script `test_sdpb.sh` is already included in the repo. It defines `WORKDIR` and uses `$WORKDIR/singularity/sdpb_3.1.0.sif`.
 
 Submit test: `sbatch test_sdpb.sh`
 
-**Success:** Output shows "Using SDPB solver" and files appear in `$SCRATCH/test_run/`
+**Success:** Output shows "Using SDPB solver" and files appear in `$WORKDIR/test_run/`
 
 #### Step 5: Production Jobs
 
 ```bash
-cd $SCRATCH/cft_bootstrap/cft_bootstrap
+cd $WORKDIR/cft_bootstrap/cft_bootstrap
 mkdir -p logs
 sbatch submit_cluster.sh
 squeue -u $USER
@@ -306,7 +270,7 @@ squeue -u $USER
 
 ### ⚠️ FASRC-Specific Warnings
 
-1. **$SCRATCH in #SBATCH headers:** Do NOT use `$SCRATCH` in `#SBATCH` directives. SLURM parses these before your shell runs, so variables won't expand. Use relative paths or absolute `/n/netscratch/...` paths.
+1. **$SCRATCH in #SBATCH headers:** Do NOT use `$SCRATCH` in `#SBATCH` directives. SLURM parses these before your shell runs, so variables won't expand. Use relative paths in SBATCH headers.
 
 2. **MPI type:** The default `pmix` works for most cases. If you get MPI plugin errors, try `export SDPB_MPI_TYPE="pmix_v3"` or `"pmi2"`.
 

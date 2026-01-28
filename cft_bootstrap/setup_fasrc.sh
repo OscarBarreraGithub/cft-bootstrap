@@ -28,8 +28,10 @@
 set -e  # Exit on error
 
 # Configuration
-# Use $SCRATCH instead of $HOME (quota-limited) - resolves to /n/netscratch on FASRC
-SINGULARITY_DIR="${SCRATCH}/singularity"
+# WORKDIR: Your personal scratch space on FASRC
+# $SCRATCH points to /n/netscratch (base), but your space is under lab/Everyone/user
+WORKDIR="${SCRATCH}/schwartz_lab/Everyone/${USER}"
+SINGULARITY_DIR="${WORKDIR}/singularity"
 # Pin to specific version for reproducibility (not :master)
 SDPB_IMAGE="sdpb_3.1.0.sif"
 SDPB_DOCKER_IMAGE="bootstrapcollaboration/sdpb:3.1.0"
