@@ -269,18 +269,14 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
 
         if isinstance(solver, SDPBSolver):
             print("  Using SDPB solver")
-            # Generate PMP and solve
-            pmp = approx.build_polynomial_matrix_program(
-                delta_epsilon=delta_epsilon,
-                delta_epsilon_prime=delta_epsilon + 0.1,  # Initial guess
-                include_spinning=(max_spin > 0),
-                use_multiresolution=use_multiresolution
-            )
-            # Binary search for bound
-            bound = solver.find_bound_with_pmp(
+            # Use SDPB's binary search to find the bound
+            bound = solver.find_bound(
                 delta_sigma, delta_epsilon,
-                pmp_builder=approx,
+                delta_prime_min=delta_epsilon + 0.1,
+                delta_prime_max=8.0,
                 tolerance=tolerance,
+                max_deriv=max_deriv,
+                poly_degree=poly_degree,
                 verbose=True
             )
         else:
