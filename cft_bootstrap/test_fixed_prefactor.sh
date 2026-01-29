@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p shared
 #SBATCH --account=iaifi_lab
-#SBATCH -t 06:00:00
+#SBATCH -t 08:00:00
 #SBATCH --mem=16G
 #SBATCH --ntasks=4
 #SBATCH --nodes=1
