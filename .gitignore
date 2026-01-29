@@ -22,6 +22,10 @@ build/
 results*/
 logs/
 
+# SLURM output files
+*.out
+*.err
+
 # MCP configuration (contains user-specific paths)
 .mcp.json
 

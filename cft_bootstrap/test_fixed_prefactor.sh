@@ -2,7 +2,7 @@
 #SBATCH -p shared
 #SBATCH --account=iaifi_lab
 #SBATCH -t 08:00:00
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --ntasks=4
 #SBATCH --nodes=1
 #SBATCH -o test_fixed_%j.out
@@ -20,6 +20,9 @@ conda activate cft_bootstrap
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
+
+# Ensure unbuffered output for real-time logging
+export PYTHONUNBUFFERED=1
 
 # SDPB config
 WORKDIR="${SCRATCH}/schwartz_lab/Everyone/${USER}"

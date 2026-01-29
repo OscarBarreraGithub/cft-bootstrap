@@ -30,7 +30,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
 #SBATCH --time=01:30:00
-#SBATCH --mem=10G
+#SBATCH --mem=16G
 
 set -e  # Exit on error
 
@@ -68,6 +68,9 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+
+# Ensure unbuffered output for real-time logging
+export PYTHONUNBUFFERED=1
 
 # ============================================================================
 # SDPB CONFIGURATION

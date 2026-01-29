@@ -45,8 +45,10 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1069,7 +1071,8 @@ class SDPBSolver:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(work_dir)
+            cwd=str(work_dir),
+            preexec_fn=os.setsid  # Create new process group for clean timeout handling
         )
 
     def _run_docker(
@@ -1105,7 +1108,8 @@ class SDPBSolver:
             docker_cmd,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            preexec_fn=os.setsid  # Create new process group for clean timeout handling
         )
 
     def _run_singularity(
@@ -1152,7 +1156,8 @@ class SDPBSolver:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(work_dir)
+            cwd=str(work_dir),
+            preexec_fn=os.setsid  # Create new process group for clean timeout handling
         )
 
     def _translate_paths_for_container(
@@ -1195,6 +1200,7 @@ class SDPBSolver:
         poly_degree: int = 20,
         delta_max: float = 40.0,
         approx: Optional[Union["PolynomialApproximator", "ElShowkPolynomialApproximator"]] = None,
+        verbose_timing: bool = True,
     ) -> Tuple[bool, Dict]:
         """
         Check if a point is excluded using SDPB.
@@ -1208,6 +1214,7 @@ class SDPBSolver:
             delta_max: Maximum dimension for fitting
             approx: Optional pre-built polynomial approximator (e.g., ElShowkPolynomialApproximator).
                     If None, uses the basic PolynomialApproximator.
+            verbose_timing: Print timing breakdown for each stage
 
         Returns:
             Tuple of (is_excluded, solver_info)
@@ -1215,12 +1222,18 @@ class SDPBSolver:
         if not self._sdpb_available:
             raise RuntimeError("SDPB is not available. Install from https://github.com/davidsd/sdpb")
 
+        # Timing instrumentation
+        timings = {}
+        t_start = time.time()
+
         # Build polynomial matrix program (use provided approx or create default)
+        t0 = time.time()
         if approx is None:
             approx = PolynomialApproximator(delta_sigma, max_deriv, poly_degree)
         pmp = approx.build_polynomial_matrix_program(
             delta_epsilon, delta_epsilon_prime, delta_max
         )
+        timings['pmp_build'] = time.time() - t0
 
         # Create temporary directory for SDPB files on shared filesystem.
         # /tmp is node-local on FASRC; srun dispatches sdpb across nodes
@@ -1241,9 +1254,11 @@ class SDPBSolver:
 
         try:
             # Write PMP to JSON file
+            t1 = time.time()
             pmp_file = work_path / "pmp.json"
             with open(pmp_file, 'w') as f:
                 json.dump(pmp, f, indent=2)
+            timings['pmp_write'] = time.time() - t1
 
             # Define output directories
             sdp_dir = work_path / "sdp"
@@ -1259,7 +1274,21 @@ class SDPBSolver:
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = self._run_command(pmp2sdp_cmd, work_path, timeout=300, use_mpi=False)
+            t2 = time.time()
+            try:
+                result = self._run_command(pmp2sdp_cmd, work_path, timeout=300, use_mpi=False)
+            except subprocess.TimeoutExpired as e:
+                timings['pmp2sdp'] = time.time() - t2
+                timings['total'] = time.time() - t_start
+                if verbose_timing:
+                    print(f"\n    TIMEOUT in pmp2sdp after {timings['pmp2sdp']:.1f}s", flush=True)
+                return False, {
+                    "status": "timeout",
+                    "stage": "pmp2sdp",
+                    "timings": timings,
+                    "delta_epsilon_prime": delta_epsilon_prime
+                }
+            timings['pmp2sdp'] = time.time() - t2
 
             if result.returncode != 0:
                 raise RuntimeError(f"pmp2sdp failed: {result.stderr}")
@@ -1280,7 +1309,21 @@ class SDPBSolver:
 
             # Only use MPI if num_threads > 1
             use_mpi = self.config.num_threads > 1
-            result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=use_mpi)
+            t3 = time.time()
+            try:
+                result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=use_mpi)
+            except subprocess.TimeoutExpired as e:
+                timings['sdpb'] = time.time() - t3
+                timings['total'] = time.time() - t_start
+                if verbose_timing:
+                    print(f"\n    TIMEOUT in SDPB after {timings['sdpb']:.1f}s", flush=True)
+                return False, {
+                    "status": "timeout",
+                    "stage": "sdpb",
+                    "timings": timings,
+                    "delta_epsilon_prime": delta_epsilon_prime
+                }
+            timings['sdpb'] = time.time() - t3
 
             if result.returncode != 0:
                 raise RuntimeError(
@@ -1290,6 +1333,7 @@ class SDPBSolver:
                 )
 
             # Parse output
+            t4 = time.time()
             out_file = out_dir / "out.txt"
             if out_file.exists():
                 with open(out_file, 'r') as f:
@@ -1297,13 +1341,19 @@ class SDPBSolver:
 
                 # Check termination reason
                 is_excluded = "primalFeasible = true" in output and "dualFeasible = true" in output
+                timings['parse'] = time.time() - t4
+                timings['total'] = time.time() - t_start
 
                 solver_info = {
                     "status": "optimal" if is_excluded else "infeasible",
                     "output": output,
                     "sdpb_return_code": result.returncode,
-                    "execution_mode": self._execution_mode.name if self._execution_mode else "NONE"
+                    "execution_mode": self._execution_mode.name if self._execution_mode else "NONE",
+                    "timings": timings
                 }
+
+                if verbose_timing:
+                    print(f"(pmp={timings['pmp_build']:.1f}s, sdpb={timings['sdpb']:.1f}s, total={timings['total']:.1f}s)", end=" ", flush=True)
             else:
                 raise RuntimeError(
                     f"sdpb returned rc=0 but no out.txt found at {out_file}.\n"
@@ -1349,6 +1399,8 @@ class SDPBSolver:
         Returns:
             Upper bound on Δε'
         """
+        search_start = time.time()
+
         if delta_prime_min is None:
             delta_prime_min = delta_epsilon + 0.1
 
@@ -1367,53 +1419,78 @@ class SDPBSolver:
             print(f"  Constraints: {n_constraints}")
             print(f"  Polynomial degree: {poly_degree}")
 
-        # Check boundary conditions
+        # IMPORTANT: Check UPPER bound FIRST (should be quickly EXCLUDED)
+        # The upper bound is far from the physical region, so SDPB should find
+        # an excluding functional quickly. The lower bound is closer to the
+        # allowed region and can take much longer (potentially hours).
         if verbose:
-            print(f"  Checking Δε' = {delta_prime_min:.2f}...", end=" ", flush=True)
+            print(f"  [Upper bound] Checking Δε' = {delta_prime_max:.2f}...", end=" ", flush=True)
 
-        excluded, _ = self.is_excluded_sdpb(
-            delta_sigma, delta_epsilon, delta_prime_min,
-            max_deriv, poly_degree, approx=approx
-        )
-
-        if verbose:
-            print("EXCLUDED" if excluded else "ALLOWED")
-
-        if excluded:
-            return delta_prime_min
-
-        if verbose:
-            print(f"  Checking Δε' = {delta_prime_max:.2f}...", end=" ", flush=True)
-
-        excluded, _ = self.is_excluded_sdpb(
+        excluded_upper, info_upper = self.is_excluded_sdpb(
             delta_sigma, delta_epsilon, delta_prime_max,
             max_deriv, poly_degree, approx=approx
         )
 
         if verbose:
-            print("EXCLUDED" if excluded else "ALLOWED")
+            result_str = "EXCLUDED" if excluded_upper else "ALLOWED"
+            if info_upper.get("status") == "timeout":
+                result_str = "TIMEOUT"
+            print(result_str)
 
-        if not excluded:
+        if not excluded_upper:
+            # Upper bound is not excluded - no finite bound exists
+            if verbose:
+                print(f"  Upper bound not excluded - no finite Δε' bound exists")
             return float('inf')
 
-        # Binary search
+        # Now check lower bound (potentially slow "allowed" point)
+        if verbose:
+            print(f"  [Lower bound] Checking Δε' = {delta_prime_min:.2f}...", end=" ", flush=True)
+
+        excluded_lower, info_lower = self.is_excluded_sdpb(
+            delta_sigma, delta_epsilon, delta_prime_min,
+            max_deriv, poly_degree, approx=approx
+        )
+
+        if verbose:
+            result_str = "EXCLUDED" if excluded_lower else "ALLOWED"
+            if info_lower.get("status") == "timeout":
+                result_str = "TIMEOUT (treating as ALLOWED)"
+            print(result_str)
+
+        # Handle timeout on lower bound: treat conservatively as allowed
+        if info_lower.get("status") == "timeout":
+            excluded_lower = False
+
+        if excluded_lower:
+            return delta_prime_min
+
+        # Binary search with established bracket
         lo, hi = delta_prime_min, delta_prime_max
         iteration = 0
 
         while hi - lo > tolerance:
             mid = (lo + hi) / 2
             iteration += 1
+            elapsed = time.time() - search_start
 
             if verbose:
-                print(f"  [{iteration}] Testing Δε' = {mid:.4f}...", end=" ", flush=True)
+                print(f"  [{iteration}] Testing Δε' = {mid:.4f} (elapsed: {elapsed:.0f}s, bracket: [{lo:.4f}, {hi:.4f}])...", end=" ", flush=True)
 
-            excluded, _ = self.is_excluded_sdpb(
+            excluded, info = self.is_excluded_sdpb(
                 delta_sigma, delta_epsilon, mid,
                 max_deriv, poly_degree, approx=approx
             )
 
             if verbose:
-                print("EXCLUDED" if excluded else "ALLOWED")
+                result_str = "EXCLUDED" if excluded else "ALLOWED"
+                if info.get("status") == "timeout":
+                    result_str = "TIMEOUT (treating as ALLOWED)"
+                print(result_str)
+
+            # Handle timeout: treat as allowed (conservative)
+            if info.get("status") == "timeout":
+                excluded = False
 
             if excluded:
                 hi = mid
@@ -1421,9 +1498,10 @@ class SDPBSolver:
                 lo = mid
 
         bound = (lo + hi) / 2
+        total_time = time.time() - search_start
 
         if verbose:
-            print(f"  Result: Δε' ≤ {bound:.4f}")
+            print(f"  Result: Δε' ≤ {bound:.4f} (total search time: {total_time:.0f}s)")
 
         return bound
 
@@ -1499,31 +1577,29 @@ class SDPBSolver:
             pmp_file = work_path / "pmp.json"
             sdp_dir = work_path / "sdp"
 
+            # Use _run_command to respect configured execution mode (Singularity, Docker, etc.)
             pmp2sdp_cmd = [
-                self.config.pmp2sdp_path,
+                "pmp2sdp",
                 f"--precision={self.config.precision}",
                 f"--input={pmp_file}",
                 f"--output={sdp_dir}",
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = subprocess.run(
-                pmp2sdp_cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            try:
+                result = self._run_command(pmp2sdp_cmd, work_path, timeout=300, use_mpi=False)
+            except subprocess.TimeoutExpired:
+                return False, {"status": "timeout", "stage": "pmp2sdp"}
 
             if result.returncode != 0:
                 return False, {"status": "pmp2sdp_failed", "stderr": result.stderr}
 
-            # Run SDPB
+            # Run SDPB using _run_command to respect configured execution mode
             out_dir = work_path / "out"
             checkpoint_dir = work_path / "ck"
 
             sdpb_cmd = [
-                "mpirun", "-n", str(self.config.num_threads),
-                self.config.sdpb_path,
+                "sdpb",
                 f"--precision={self.config.precision}",
                 f"--sdpDir={sdp_dir}",
                 f"--outDir={out_dir}",
@@ -1535,12 +1611,11 @@ class SDPBSolver:
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = subprocess.run(
-                sdpb_cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600
-            )
+            use_mpi = self.config.num_threads > 1
+            try:
+                result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=use_mpi)
+            except subprocess.TimeoutExpired:
+                return False, {"status": "timeout", "stage": "sdpb"}
 
             # Parse output
             out_file = out_dir / "out.txt"

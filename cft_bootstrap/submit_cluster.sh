@@ -179,6 +179,9 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# Ensure unbuffered output for real-time logging
+export PYTHONUNBUFFERED=1
+
 # ============================================================================
 # BUILD COMMAND
 # ============================================================================
