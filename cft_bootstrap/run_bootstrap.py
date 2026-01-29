@@ -270,6 +270,7 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
         if isinstance(solver, SDPBSolver):
             print("  Using SDPB solver")
             # Use SDPB's binary search to find the bound
+            # Pass the ElShowkPolynomialApproximator so SDPB uses the correct constraint count
             bound = solver.find_bound(
                 delta_sigma, delta_epsilon,
                 delta_prime_min=delta_epsilon + 0.1,
@@ -277,7 +278,8 @@ def run_gap_bound(delta_sigma: float, delta_epsilon: float,
                 tolerance=tolerance,
                 max_deriv=max_deriv,
                 poly_degree=poly_degree,
-                verbose=True
+                verbose=True,
+                approx=approx,  # Use El-Showk approximator instead of basic PolynomialApproximator
             )
         else:
             print("  SDPB not available, falling back to El-Showk with CVXPY")

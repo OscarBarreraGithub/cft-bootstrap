@@ -677,13 +677,38 @@ package may not expose this path. This does NOT affect the SDPB execution path �
 the actual F-vector computation uses numpy/scipy float64. To silence: `pip
 install symengine` inside the env (pip's wheel bundles the C wrapper).
 
+#### Bug 5: `el-showk-sdpb` not using ElShowkPolynomialApproximator (2026-01-28)
+
+The `el-showk-sdpb` method in `run_bootstrap.py` created an `ElShowkPolynomialApproximator`
+but never passed it to `SDPBSolver.find_bound()`. Internally, `find_bound()` created its
+own basic `PolynomialApproximator`, resulting in only 3 constraints instead of 21.
+
+**Symptom:** `Result: Δε' ≤ inf` (both boundary checks returned "ALLOWED")
+
+**Fix:** Added `approx` parameter to `is_excluded_sdpb()` and `find_bound()` in
+`sdpb_interface.py`. Updated `run_bootstrap.py` to pass `approx=approx` so the
+El-Showk approximator is actually used.
+
+#### Bug 6: Degenerate constraints from Richardson extrapolation boundary issues (2026-01-28)
+
+After fixing Bug 5, SDPB crashed with: `Normalized Q should have ones on diagonal. For i = 1: Q_ii = 0`
+
+**Cause:** Richardson extrapolation in `analytical_derivatives.py` uses step h=0.08. For
+high-order derivatives (m=11), evaluation points hit the boundary check at z=0.99,
+returning 0.0 and corrupting the F-vector computation.
+
+**Fix:** Enabled `high_precision=True` in `ElShowkPolynomialApproximator` constructor,
+which uses mpmath arbitrary-precision arithmetic instead of Richardson extrapolation.
+This avoids boundary issues and produces correct F-vectors.
+
 #### Current state
 
 - pmp2sdp: ✅ parses correctly (verified RC=0)
 - sdpb file visibility: ✅ fixed with --bind
 - Test script: ✅ single-node, single-task for small problems
-- Last test run (57377903): SDPB actually ran, hit 15-min time limit on test partition
-- Next step: re-run with the single-task test script — should complete in seconds
+- el-showk-sdpb: ✅ now correctly uses ElShowkPolynomialApproximator with 21 constraints
+- high_precision: ✅ enabled by default for numerical stability
+- Next step: re-run test to verify finite bound ~3.8
 
 ---
 

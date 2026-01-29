@@ -305,9 +305,11 @@ class PolynomialApproximator:
 
         if include_prefactor:
             # Damped rational prefactor for positivity measure
-            # Using e^{-x} ensures convergence of the integral
+            # Use R_CROSS = 3 - 2*sqrt(2) ≈ 0.172 to match pycftboot conventions
+            # This is the crossing-symmetric radial coordinate
+            R_CROSS = 3 - 2 * np.sqrt(2)  # ≈ 0.17157
             result.prefactor_constant = 1.0
-            result.prefactor_base = np.exp(-1)
+            result.prefactor_base = R_CROSS
             result.prefactor_poles = []
 
         return result
@@ -451,8 +453,9 @@ class ElShowkPolynomialApproximator:
         self.n_constraints = count_coefficients(nmax)
         self.poly_degree = poly_degree
 
-        # El-Showk crossing vector computer
-        self.crossing = ElShowkCrossingVector(delta_sigma, nmax)
+        # El-Showk crossing vector computer (high_precision for numerical stability)
+        # High precision uses mpmath which avoids boundary issues in Richardson extrapolation
+        self.crossing = ElShowkCrossingVector(delta_sigma, nmax, high_precision=True)
 
     def unitarity_bound(self, ell: int, d: int = 3) -> float:
         """Unitarity bound for spin ell operators in d dimensions."""
@@ -507,8 +510,15 @@ class ElShowkPolynomialApproximator:
         result = PolynomialVector(polynomials=polynomials)
 
         if include_prefactor:
+            # Use R_CROSS from pycftboot conventions (not exp(-1)!)
+            # R_CROSS = 3 - 2*sqrt(2) ≈ 0.172 is the crossing-symmetric radial coordinate
+            # This is critical for matching pycftboot/SDPB results
+            R_CROSS = 3 - 2 * np.sqrt(2)  # ≈ 0.17157
             result.prefactor_constant = 1.0
-            result.prefactor_base = np.exp(-1)
+            result.prefactor_base = R_CROSS
+            # For numerical polynomial fitting, we don't have explicit poles
+            # pycftboot uses Zamolodchikov recursion to compute exact poles
+            # Without poles, we rely on the polynomial approximation quality
             result.prefactor_poles = []
 
         return result
@@ -1184,6 +1194,7 @@ class SDPBSolver:
         max_deriv: int = 21,
         poly_degree: int = 20,
         delta_max: float = 40.0,
+        approx: Optional[Union["PolynomialApproximator", "ElShowkPolynomialApproximator"]] = None,
     ) -> Tuple[bool, Dict]:
         """
         Check if a point is excluded using SDPB.
@@ -1195,6 +1206,8 @@ class SDPBSolver:
             max_deriv: Maximum derivative order
             poly_degree: Polynomial approximation degree
             delta_max: Maximum dimension for fitting
+            approx: Optional pre-built polynomial approximator (e.g., ElShowkPolynomialApproximator).
+                    If None, uses the basic PolynomialApproximator.
 
         Returns:
             Tuple of (is_excluded, solver_info)
@@ -1202,8 +1215,9 @@ class SDPBSolver:
         if not self._sdpb_available:
             raise RuntimeError("SDPB is not available. Install from https://github.com/davidsd/sdpb")
 
-        # Build polynomial matrix program
-        approx = PolynomialApproximator(delta_sigma, max_deriv, poly_degree)
+        # Build polynomial matrix program (use provided approx or create default)
+        if approx is None:
+            approx = PolynomialApproximator(delta_sigma, max_deriv, poly_degree)
         pmp = approx.build_polynomial_matrix_program(
             delta_epsilon, delta_epsilon_prime, delta_max
         )
@@ -1264,7 +1278,9 @@ class SDPBSolver:
                 f"--verbosity={self.config.verbosity}"
             ]
 
-            result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=True)
+            # Only use MPI if num_threads > 1
+            use_mpi = self.config.num_threads > 1
+            result = self._run_command(sdpb_cmd, work_path, timeout=3600, use_mpi=use_mpi)
 
             if result.returncode != 0:
                 raise RuntimeError(
@@ -1312,7 +1328,8 @@ class SDPBSolver:
         tolerance: float = 0.01,
         max_deriv: int = 21,
         poly_degree: int = 20,
-        verbose: bool = True
+        verbose: bool = True,
+        approx: Optional[Union["PolynomialApproximator", "ElShowkPolynomialApproximator"]] = None,
     ) -> float:
         """
         Find the upper bound on Δε' using binary search with SDPB.
@@ -1326,6 +1343,8 @@ class SDPBSolver:
             max_deriv: Maximum derivative order
             poly_degree: Polynomial approximation degree
             verbose: Print progress
+            approx: Optional pre-built polynomial approximator (e.g., ElShowkPolynomialApproximator).
+                    If None, uses the basic PolynomialApproximator.
 
         Returns:
             Upper bound on Δε'
@@ -1335,11 +1354,17 @@ class SDPBSolver:
 
         delta_prime_min = max(delta_prime_min, delta_epsilon + 0.05)
 
+        # Report constraint count based on approximator
+        if approx is not None and hasattr(approx, 'n_constraints'):
+            n_constraints = approx.n_constraints
+        else:
+            n_constraints = (max_deriv + 1) // 2
+
         if verbose:
             print(f"Finding Δε' bound with SDPB")
             print(f"  Δσ = {delta_sigma:.4f}, Δε = {delta_epsilon:.4f}")
             print(f"  Search range: [{delta_prime_min:.2f}, {delta_prime_max:.2f}]")
-            print(f"  Constraints: {(max_deriv + 1) // 2}")
+            print(f"  Constraints: {n_constraints}")
             print(f"  Polynomial degree: {poly_degree}")
 
         # Check boundary conditions
@@ -1348,7 +1373,7 @@ class SDPBSolver:
 
         excluded, _ = self.is_excluded_sdpb(
             delta_sigma, delta_epsilon, delta_prime_min,
-            max_deriv, poly_degree
+            max_deriv, poly_degree, approx=approx
         )
 
         if verbose:
@@ -1362,7 +1387,7 @@ class SDPBSolver:
 
         excluded, _ = self.is_excluded_sdpb(
             delta_sigma, delta_epsilon, delta_prime_max,
-            max_deriv, poly_degree
+            max_deriv, poly_degree, approx=approx
         )
 
         if verbose:
@@ -1384,7 +1409,7 @@ class SDPBSolver:
 
             excluded, _ = self.is_excluded_sdpb(
                 delta_sigma, delta_epsilon, mid,
-                max_deriv, poly_degree
+                max_deriv, poly_degree, approx=approx
             )
 
             if verbose:
