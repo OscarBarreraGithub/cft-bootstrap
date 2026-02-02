@@ -42,3 +42,74 @@ conda activate cft_bootstrap
 Python at: `/n/home09/obarrera/.conda/envs/cft_bootstrap/bin/python`
 
 Key packages: numpy, scipy, mpmath, cvxpy (symengine install is incomplete — ignore warnings)
+
+---
+
+## Known Issues (February 2026)
+
+### Issue 1: Large parameters cause PMP build to hang
+
+**Symptom:** Job appears to hang at `[Upper bound] Checking Δε' = 8.00...`
+
+**Cause:** NOT MPI issues. The `ElShowkPolynomialApproximator` recomputes ~98 F-vectors with high-precision mpmath for EVERY SDPB check. Each computation takes seconds.
+
+**Workaround:** Use small parameters:
+```bash
+--nmax 3 --max-spin 4 --poly-degree 8   # Completes in seconds
+# NOT:
+--nmax 5 --max-spin 10 --poly-degree 15  # Takes hours
+```
+
+**Proper fix needed:** Cache polynomial approximations outside binary search loop.
+
+### Issue 2: SDPB Q-matrix error
+
+**Symptom:**
+```
+Assertion 'diff < eps' failed:
+  Normalized Q should have ones on diagonal. For i = 0: Q_ii = 0
+```
+
+**Cause:** PMP formulation issue. Numerical Chebyshev interpolation produces degenerate constraint matrices.
+
+**Status:** Unresolved. Need to use `SymbolicPolynomialApproximator` or add proper bilinear basis.
+
+### Issue 3: SDPB returns wrong results
+
+**Symptom:** Points that should be "EXCLUDED" return "ALLOWED" (e.g., Δε'=6.0 at Ising point).
+
+**Cause:** Same as Issue 2 - PMP formulation is incorrect.
+
+**Status:** Unresolved.
+
+---
+
+## Working Test Commands
+
+```bash
+# Verify SDPB container works (completes in ~2s)
+sbatch -p test --account=iaifi_lab test_sdpb_quick.sh
+
+# Verify CVXPY baseline (completes in ~10s)
+sbatch -p test --account=iaifi_lab quick_test.sh
+```
+
+## Non-Working Test Commands
+
+```bash
+# These will hang or fail - DO NOT USE until issues fixed:
+sbatch test_fixed_prefactor.sh  # Hangs (PMP build too slow)
+sbatch test_small_params.sh     # Q-matrix error
+```
+
+---
+
+## Documentation Files
+
+| File | Purpose |
+|------|---------|
+| `cft_bootstrap/FIX_NOTES.md` | Current status and known issues (most up-to-date) |
+| `ROADMAP.md` | Implementation history and debugging sessions |
+| `cft_bootstrap/README.md` | User guide and quick start |
+
+**Always check `FIX_NOTES.md` first for current status.**

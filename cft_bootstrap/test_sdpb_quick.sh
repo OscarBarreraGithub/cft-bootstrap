@@ -51,10 +51,16 @@ echo ""
 WORKDIR="${SCRATCH}/schwartz_lab/Everyone/${USER}"
 
 echo "1. Activating conda environment..."
-if command -v conda >/dev/null 2>&1; then
+# Initialize conda (try user installation first, then system)
+if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniforge3/etc/profile.d/conda.sh"
+elif [ -f "$HOME/.conda/etc/profile.d/conda.sh" ]; then
+    source "$HOME/.conda/etc/profile.d/conda.sh"
+elif command -v conda >/dev/null 2>&1; then
     source "$(conda info --base)/etc/profile.d/conda.sh"
 else
-    source /n/sw/Miniforge3-24.7.1-0/etc/profile.d/conda.sh
+    echo "ERROR: Could not find conda" >&2
+    exit 1
 fi
 conda activate cft_bootstrap
 echo "   Python: $(which python)"

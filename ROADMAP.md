@@ -701,7 +701,7 @@ returning 0.0 and corrupting the F-vector computation.
 which uses mpmath arbitrary-precision arithmetic instead of Richardson extrapolation.
 This avoids boundary issues and produces correct F-vectors.
 
-#### Current state
+#### Current state (January 28-29)
 
 - pmp2sdp: ✅ parses correctly (verified RC=0)
 - sdpb file visibility: ✅ fixed with --bind
@@ -709,6 +709,61 @@ This avoids boundary issues and produces correct F-vectors.
 - el-showk-sdpb: ✅ now correctly uses ElShowkPolynomialApproximator with 21 constraints
 - high_precision: ✅ enabled by default for numerical stability
 - Next step: re-run test to verify finite bound ~3.8
+
+---
+
+### February 2, 2026 Update: Root Cause of 8-Hour Timeout
+
+**Critical Discovery:** The 8-hour timeout was NOT caused by MPI hanging.
+
+#### What We Found
+
+1. **SDPB itself is fast** - Quick test completes in 1.9 seconds
+2. **PMP construction is slow** - With `nmax=5, max_spin=10, poly_degree=15`, building the PMP takes minutes
+3. **Why slow**: Each SDPB check computes ~98 F-vectors with high-precision mpmath:
+   - `(poly_degree + 1)` samples × `(max_spin/2 + 1)` spin channels
+   - Each mpmath F-vector computation takes seconds
+   - This happens for EVERY binary search iteration
+
+#### Test Results
+
+| Test | Parameters | Outcome |
+|------|------------|---------|
+| `test_sdpb_quick.sh` | nmax=3, max_spin=2 | ✅ Completes in 1.9s |
+| `test_fixed_prefactor.sh` | nmax=5, max_spin=10 | ❌ Hangs for hours (PMP build) |
+| `test_small_params.sh` | nmax=3, max_spin=4 | ❌ SDPB Q-matrix error |
+
+#### The Q-Matrix Error
+
+When SDPB does run, it fails with:
+```
+Assertion 'diff < eps' failed:
+  Normalized Q should have ones on diagonal. For i = 0: Q_ii = 0
+```
+
+This confirms the PMP formulation issue identified earlier - the numerical Chebyshev interpolation
+approach produces degenerate constraint matrices.
+
+#### Fixes Applied (February 2)
+
+1. **MPI Bindings** - Added `/tmp`, `/dev/shm` bindings and `--network=host` for Singularity
+   - File: `sdpb_interface.py` (`_run_singularity()`)
+   - Note: Correct fix but wasn't the root cause of timeout
+
+2. **Conda Path Hardcoding** - Removed hardcoded `/n/sw/Miniforge3-*` paths
+   - Files: All `*.sh` scripts
+   - Now tries user conda first, then system
+
+#### Remaining Issues (Priority Order)
+
+1. **PMP Formulation** - Numerical interpolation → degenerate Q matrix
+   - Fix: Use `SymbolicPolynomialApproximator` or add bilinear basis
+
+2. **PMP Build Speed** - Recomputes F-vectors for every binary search step
+   - Fix: Cache polynomial approximations outside the search loop
+
+3. **"ALLOWED" results wrong** - Quick test returns ALLOWED for Δε'=6.0 (should be EXCLUDED)
+   - Fix: Correct the PMP formulation
 
 ---
 

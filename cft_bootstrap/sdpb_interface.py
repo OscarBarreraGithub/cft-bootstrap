@@ -1147,6 +1147,15 @@ class SDPBSolver:
         # Bind work directory so all MPI ranks can access it
         full_cmd.extend(["--bind", str(work_dir)])
 
+        # Add MPI-specific bindings for PMIx communication
+        if use_mpi:
+            # PMIx creates sockets in /tmp/.pmix* for process coordination
+            full_cmd.extend(["--bind", "/tmp:/tmp"])
+            # Shared memory for efficient MPI communication
+            full_cmd.extend(["--bind", "/dev/shm:/dev/shm"])
+            # Use host network directly for MPI (avoids Singularity network isolation issues)
+            full_cmd.append("--network=host")
+
         # Add image and command
         full_cmd.append(image_path)
         full_cmd.extend(cmd)

@@ -1,26 +1,81 @@
 # CFT Bootstrap: Status & Changelog
 
-## Current Status (January 29, 2026)
+## Current Status (February 2, 2026)
 
-### Baseline Result
-| Metric | Value | Reference | Gap |
-|--------|-------|-----------|-----|
-| Δε' bound at Ising point | **≤ 2.53** | ~3.8 | ~1.27 |
-| Δσ (external scalar) | 0.518 | 0.518 | - |
-| Δε (first scalar gap) | 1.41 | 1.41 | - |
+### Summary
 
-Confirmed with CVXPY via `quick_test.sh`.
+| Component | Status | Notes |
+|-----------|--------|-------|
+| SDPB Container | **Working** | Singularity on FASRC, completes in ~2s for small problems |
+| CVXPY Baseline | **Working** | Δε' ≤ 2.53 at Ising point |
+| El-Showk + SDPB | **Broken** | Numerical formulation error (Q diagonal = 0) |
+| Large Parameter Tests | **Slow** | PMP build takes minutes due to mpmath |
 
-### SDPB Status
-- Integration: **Working** (Singularity container on FASRC)
-- Prefactor fix: **Applied** (R_CROSS)
-- MPI fix: **Applied** (conditional on num_threads)
-- Awaiting: Full validation run with MPI parallelism
+### Key Finding (February 2, 2026)
 
-### Next Step
-```bash
-sbatch test_fixed_prefactor.sh  # MPI parallel, 4 tasks, 3 hours
+**The 8-hour timeout was NOT caused by MPI hanging.**
+
+It was caused by **slow PMP construction** with high-precision mpmath:
+- With `nmax=5, max_spin=10, poly_degree=15`: ~98 F-vector computations per SDPB call
+- Each high-precision F-vector takes seconds with mpmath
+- Total PMP build time: **minutes per call** (before SDPB even runs)
+
+**SDPB itself is fast** - the quick test completes in 1.9 seconds.
+
+---
+
+## Test Results
+
+### Working Tests
+
+| Test | Parameters | Result | Time |
+|------|------------|--------|------|
+| `test_sdpb_quick.sh` | nmax=3, max_spin=2, poly_degree=8 | SDPB runs, returns "ALLOWED" | 1.9s |
+| `quick_test.sh` | CVXPY discrete | Δε' ≤ 2.53 | ~10s |
+
+### Failing Tests
+
+| Test | Parameters | Issue |
+|------|------------|-------|
+| `test_fixed_prefactor.sh` | nmax=5, max_spin=10 | PMP build too slow (hangs for hours) |
+| `test_small_params.sh` | nmax=3, max_spin=4 | SDPB error: "Q diagonal should be 1" |
+
+---
+
+## Known Issues
+
+### Issue 1: Slow PMP Construction (CRITICAL)
+
+**Problem**: `ElShowkPolynomialApproximator.build_polynomial_matrix_program()` is extremely slow with large parameters.
+
+**Why**: For each SDPB check, it computes:
+- `(poly_degree + 1)` sample points × `(max_spin/2 + 1)` spin channels
+- Each sample calls `crossing.build_F_vector()` with high-precision mpmath
+- Example: nmax=5, max_spin=10, poly_degree=15 → **96 F-vector computations**
+
+**Workaround**: Use small parameters (nmax≤3, max_spin≤4, poly_degree≤8)
+
+**Fix needed**: Cache polynomial approximations or pre-compute outside binary search loop.
+
+### Issue 2: SDPB Q-Matrix Error (HIGH)
+
+**Problem**: SDPB fails with:
 ```
+Assertion 'diff < eps' failed:
+  Normalized Q should have ones on diagonal. For i = 0: Q_ii = 0
+```
+
+**Cause**: The PMP formulation produces degenerate constraint matrices.
+
+**Related**: FIX_NOTES previously mentioned:
+- Missing bilinear basis (pycftboot uses Cholesky orthogonalization)
+- Missing pole structure in prefactor
+- Numerical vs symbolic polynomial representation
+
+### Issue 3: "ALLOWED" When Should Be "EXCLUDED"
+
+The quick SDPB test returns "ALLOWED" for Δε'=6.0, which should be excluded.
+This indicates the optimization problem isn't correctly formulated.
 
 ---
 
@@ -29,83 +84,79 @@ sbatch test_fixed_prefactor.sh  # MPI parallel, 4 tasks, 3 hours
 ### 1. Prefactor Base (January 28, 2026)
 - **Bug**: Used `exp(-1) ≈ 0.368` for damped rational prefactor
 - **Fix**: Changed to `R_CROSS = 3 - 2*sqrt(2) ≈ 0.172`
-- **File**: `sdpb_interface.py` (lines ~310 and ~515)
-- **Reason**: Matches pycftboot convention for crossing-symmetric radial coordinate
+- **File**: `sdpb_interface.py`
 
 ### 2. MPI Conditional (January 29, 2026)
-- **Bug**: Always used MPI even for `num_threads=1`, causing errors
+- **Bug**: Always used MPI even for `num_threads=1`
 - **Fix**: `use_mpi = num_threads > 1`
-- **File**: `sdpb_interface.py` (line ~1281)
-- **Reason**: Single-threaded SDPB should run without MPI overhead
+- **File**: `sdpb_interface.py`
+
+### 3. Singularity MPI Bindings (February 2, 2026)
+- **Addition**: Added `/tmp`, `/dev/shm` bindings and `--network=host` for MPI mode
+- **File**: `sdpb_interface.py` (`_run_singularity()`)
+- **Note**: This fix is correct but wasn't the cause of the original timeout
+
+### 4. Conda Path Hardcoding (February 2, 2026)
+- **Bug**: Hardcoded `/n/sw/Miniforge3-24.7.1-0/etc/profile.d/conda.sh`
+- **Fix**: Try user installations first, then system
+- **Files**: All shell scripts (`*.sh`)
 
 ---
 
-## Test Scripts
+## Architecture Notes
 
-| Script | Purpose | Parameters | Status |
-|--------|---------|------------|--------|
-| `quick_test.sh` | CVXPY baseline | Discrete SDP | **PASSED** (Δε' ≤ 2.53) |
-| `test_sdpb.sh` | SDPB integration | nmax=5, max_spin=10 | Ready |
-| `test_fixed_prefactor.sh` | SDPB with fixes | nmax=5, max_spin=10, MPI | Ready |
+### Why CVXPY Works But SDPB Fails
 
----
+CVXPY uses **discrete operator sampling** - it checks positivity at specific Δ values.
+This works but produces weak bounds (Δε' ≤ 2.53 instead of ~3.8).
 
-## Known Limitations: The ~1.2 Unit Gap
+SDPB uses **polynomial positivity** - it requires F(Δ) ≥ 0 for ALL Δ in a range.
+This is mathematically stronger but requires correct polynomial representation:
+1. Exact symbolic polynomials (via Zamolodchikov recursion)
+2. Orthogonal bilinear basis (via Cholesky decomposition)
+3. Correct pole structure in damped rational prefactor
 
-The gap is **structural**, not numerical. Root causes:
+Our current `ElShowkPolynomialApproximator` uses numerical Chebyshev interpolation,
+which doesn't satisfy these requirements.
 
-### 1. Numerical vs Symbolic Polynomials
-- **pycftboot**: Exact symbolic via Zamolodchikov recursion
-- **Our code**: Numerical Chebyshev interpolation
+### The Real Fix
 
-### 2. Missing Bilinear Basis
-- **pycftboot**: Orthogonal basis via Cholesky decomposition
-- **Our code**: Direct polynomial fitting
-
-### 3. Missing Pole Structure
-- **pycftboot**: Explicit conformal block poles in prefactor
-- **Our code**: Empty pole list (`prefactor_poles = []`)
-
-### Why It Matters
-Polynomial positivity (α·F(Δ) ≥ 0 for ALL Δ) is harder than discrete sampling.
-Our discrete approach finds "trivial" excluding functionals that shouldn't exist.
-
----
-
-## Potential Full Fixes
-
-### Option 1: Symengine (Recommended)
-`SymbolicPolynomialApproximator` is already implemented correctly.
+Use `SymbolicPolynomialApproximator` with pycftboot's exact polynomial computation:
 ```bash
-pip install symengine
-# Then use --method symbolic-sdpb
+# This path exists but isn't fully integrated
+python run_bootstrap.py --method symbolic-sdpb ...
 ```
 
-### Option 2: Bilinear Basis
-Implement in `ElShowkPolynomialApproximator` with known pole positions:
-- 3D scalar poles: Δ = 0.5 - n for n = 0, 1, 2, ...
+Or fix `ElShowkPolynomialApproximator` to:
+1. Use symbolic polynomials instead of numerical interpolation
+2. Add proper bilinear basis orthogonalization
+3. Include conformal block poles in prefactor
 
 ---
 
-## Verification Checklist
+## File Status
 
-After SDPB validation completes:
-- [ ] Δε' = 3.0 is ALLOWED (not excluded)
-- [ ] Bound converges to ~3.8 ± 0.1
-- [ ] SDPB runs without errors
-- [ ] Binary search completes within time limit
+### Test Scripts
+| Script | Status | Use For |
+|--------|--------|---------|
+| `quick_test.sh` | Working | CVXPY baseline verification |
+| `test_sdpb_quick.sh` | Working | SDPB container verification |
+| `test_fixed_prefactor.sh` | Broken | Don't use until PMP speed fixed |
+| `test_small_params.sh` | Broken | Demonstrates Q-matrix error |
+
+### Key Source Files
+| File | Status |
+|------|--------|
+| `sdpb_interface.py` | Has MPI bindings fix, but PMP formulation broken |
+| `polynomial_bootstrap.py` | Has correct infrastructure, needs integration |
+| `pycftboot_bridge.py` | Working, provides exact polynomials |
+| `el_showk_basis.py` | Working for CVXPY, not for SDPB |
 
 ---
 
-## Files Modified This Session
+## Next Steps (Priority Order)
 
-1. `sdpb_interface.py` - Prefactor fix + MPI conditional
-2. `test_fixed_prefactor.sh` - MPI configuration (ntasks=4)
-3. `FIX_NOTES.md` - This status document
-
-## Files Cleaned Up
-
-Deleted test artifacts:
-- 22 SLURM output files (*.out, *.err)
-- Experimental scripts (compare_test*.sh, quick_sdpb_test.sh)
-- Python cache (__pycache__/)
+1. **Fix PMP formulation** - Either integrate `SymbolicPolynomialApproximator` or fix numerical approximation
+2. **Add polynomial caching** - Don't recompute F-vectors for every binary search iteration
+3. **Validate with small problem** - Get nmax=3, max_spin=2 working end-to-end
+4. **Scale up parameters** - Only after small problems work correctly
